@@ -37,7 +37,7 @@ No Mac de desenvolvimento dá para rodar os testes da API. O som e o pareamento 
 Na placa, como root:
 
 ```bash
-sudo git clone https://github.com/MEU-USUARIO/audio-endpoint.git /opt/audio-endpoint
+sudo git clone https://github.com/dflourusso/audio-endpoint.git /opt/audio-endpoint
 cd /opt/audio-endpoint
 sudo ./install.sh
 ```
