@@ -227,7 +227,7 @@ function BluetoothPage() {
     setBusy(device.mac);
     setError("");
     try {
-      const { job_id: jobId } = await api.pair(device.mac, device.name);
+      const { job_id: jobId } = await api.pair(device.mac, device.name, device.adapter);
       for (let attempt = 0; attempt < 40; attempt += 1) {
         await sleep(1000);
         const result = await api.pairResult(jobId, device.mac, device.name);

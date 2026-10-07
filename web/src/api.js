@@ -16,7 +16,8 @@ export const api = {
   bluetoothStatus: () => request("/api/bluetooth/status"),
   scan: () => request("/api/bluetooth/scan", { method: "POST", body: "{}" }),
   scanResult: (jobId) => request(`/api/bluetooth/scan/${jobId}`),
-  pair: (mac, name) => request("/api/bluetooth/pair", { method: "POST", body: JSON.stringify({ mac, name }) }),
+  pair: (mac, name, adapter) =>
+    request("/api/bluetooth/pair", { method: "POST", body: JSON.stringify({ mac, name, adapter: adapter || "" }) }),
   pairResult: (jobId, mac, name) =>
     request(`/api/bluetooth/pair/${jobId}?mac=${encodeURIComponent(mac)}&name=${encodeURIComponent(name || "")}`),
   connect: (mac) => request("/api/bluetooth/connect", { method: "POST", body: JSON.stringify({ mac }) }),

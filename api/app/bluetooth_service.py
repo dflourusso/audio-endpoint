@@ -54,6 +54,19 @@ def merge_devices(status: dict, paired: list, config: dict) -> list[dict]:
     return sorted(found.values(), key=lambda device: (not device["connected"], device["name"].lower()))
 
 
+def choose_adapter(adapters: list) -> str:
+    rows = [
+        item
+        for item in adapters
+        if isinstance(item, dict) and str(item.get("id") or "").strip()
+    ]
+    if not rows:
+        raise BridgeError("Nenhum adaptador Bluetooth apareceu. O rádio da placa não está visível para o bridge.")
+    powered = [item for item in rows if item.get("powered")]
+    chosen = (powered or rows)[0]
+    return str(chosen["id"]).strip()
+
+
 def connected_device(devices: list[dict]) -> dict | None:
     for device in devices:
         if device.get("connected"):
@@ -78,23 +91,26 @@ class BluetoothService:
         }
 
     def scan(self) -> dict:
-        result = self.bridge.scan()
+        adapter = choose_adapter(self.bridge.adapters())
+        result = self.bridge.scan(adapter)
         job_id = str(result.get("job_id") or "")
         if not job_id:
             raise BridgeError("O bridge não iniciou a busca Bluetooth.")
-        return {"job_id": job_id}
+        return {"job_id": job_id, "adapter": adapter}
 
     def scan_result(self, job_id: str) -> dict:
         result = self.bridge.scan_result(job_id)
         devices = []
         for device in result.get("devices") or []:
             if isinstance(device, dict) and device.get("mac"):
-                devices.append(
-                    {
-                        "mac": str(device["mac"]).upper(),
-                        "name": _name_of(device) or str(device["mac"]).upper(),
-                    }
-                )
+                found = {
+                    "mac": str(device["mac"]).upper(),
+                    "name": _name_of(device) or str(device["mac"]).upper(),
+                }
+                adapter = str(device.get("adapter") or "").strip()
+                if adapter:
+                    found["adapter"] = adapter
+                devices.append(found)
         return {"status": result.get("status") or "running", "devices": devices, "error": result.get("error")}
 
     def start_pair(self, mac: str, adapter: str = "") -> dict:

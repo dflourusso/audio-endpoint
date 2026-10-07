@@ -62,8 +62,19 @@ class BridgeClient:
         data = self.request("POST", "/api/config", json=config)
         return data if isinstance(data, dict) else {}
 
-    def scan(self) -> dict:
-        data = self.request("POST", "/api/bt/scan")
+    def adapters(self) -> list:
+        data = self.request("GET", "/api/bt/adapters")
+        if isinstance(data, dict):
+            items = data.get("adapters") or []
+            return items if isinstance(items, list) else []
+        return data if isinstance(data, list) else []
+
+    def scan(self, adapter: str) -> dict:
+        data = self.request(
+            "POST",
+            "/api/bt/scan",
+            json={"adapter": adapter, "audio_only": True},
+        )
         return data if isinstance(data, dict) else {}
 
     def scan_result(self, job_id: str) -> dict:

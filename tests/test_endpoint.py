@@ -1,7 +1,11 @@
 import json
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
+
+from app.bluetooth_service import choose_adapter
+from app.bridge import BridgeClient
 
 from app.audio import list_outputs, select_output, OutputNotSupported
 from app.fleet import remove_device, upsert_device
@@ -75,6 +79,9 @@ class FakeBridge:
         self.config_data = {"BLUETOOTH_DEVICES": [], "BRIDGE_NAME": ""}
         self.removed = []
         self.restarted = 0
+        self.adapters_data = [{"id": "hci0", "mac": "11:22:33:44:55:66", "name": "onboard", "powered": True}]
+        self.scan_calls = []
+        self.pair_calls = []
 
     def version(self):
         return {"version": "2.75.0"}
@@ -102,16 +109,24 @@ class FakeBridge:
         self.config_data = config
         return {}
 
-    def scan(self):
+    def adapters(self):
+        return list(self.adapters_data)
+
+    def scan(self, adapter):
+        self.scan_calls.append(adapter)
         return {"job_id": "job-123456"}
 
     def scan_result(self, job_id):
-        return {"status": "done", "devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Caixa"}]}
+        return {
+            "status": "done",
+            "devices": [{"mac": "AA:BB:CC:DD:EE:FF", "name": "Caixa", "adapter": "hci0"}],
+        }
 
     def paired(self):
         return []
 
     def pair_new(self, mac, adapter=""):
+        self.pair_calls.append((mac, adapter))
         return {"job_id": "pair-123456"}
 
     def pair_result(self, job_id):
@@ -185,6 +200,53 @@ def test_hostname_is_stored_in_lowercase():
     hostname_calls = [call for call in agent.calls if call[0] == "set-hostname"]
     assert hostname_calls == [("set-hostname", {"hostname": "audio-sala"})]
     assert bridge.config_data["BRIDGE_NAME"] == "audio-sala"
+
+
+def test_scan_sends_the_only_adapter():
+    client, bridge, _agent = build_client()
+    response = client.post("/api/bluetooth/scan")
+    assert response.status_code == 200
+    assert bridge.scan_calls == ["hci0"]
+    found = client.get("/api/bluetooth/scan/job-123456")
+    assert found.json()["devices"][0]["adapter"] == "hci0"
+    paired = client.post(
+        "/api/bluetooth/pair",
+        json={"mac": "aa:bb:cc:dd:ee:ff", "name": "Caixa", "adapter": "hci0"},
+    )
+    assert paired.status_code == 200
+    assert bridge.pair_calls == [("AA:BB:CC:DD:EE:FF", "hci0")]
+
+
+def test_scan_without_an_adapter_stays_in_portuguese():
+    client, bridge, _agent = build_client()
+    bridge.adapters_data = []
+    response = client.post("/api/bluetooth/scan")
+    assert response.status_code == 502
+    assert "rádio" in response.json()["message"]
+    assert bridge.scan_calls == []
+
+
+def test_scan_prefers_the_first_powered_adapter():
+    assert choose_adapter(
+        [
+            {"id": "hci0", "powered": False},
+            {"id": "hci1", "powered": True},
+            {"id": "hci2", "powered": True},
+        ]
+    ) == "hci1"
+
+
+def test_bridge_scan_posts_adapter_and_audio_only():
+    seen = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen["path"] = request.url.path
+        seen["body"] = json.loads(request.content)
+        return httpx.Response(200, json={"job_id": "job-123456"})
+
+    client = BridgeClient("http://bridge.invalid", transport=httpx.MockTransport(handler))
+    assert client.scan("hci0")["job_id"] == "job-123456"
+    assert seen == {"path": "/api/bt/scan", "body": {"adapter": "hci0", "audio_only": True}}
 
 
 def test_pair_result_registers_the_speaker_in_the_fleet():
