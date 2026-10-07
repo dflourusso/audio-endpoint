@@ -146,7 +146,7 @@ class HostControl:
                 self._write_update("failed", up.stderr.strip() or "docker compose up falhou")
                 return
             self._write_update("succeeded", "Atualização concluída")
-            threading.Timer(1.0, lambda: self.run(["systemctl", "restart", "audio-endpoint-agent"])).start()
+            threading.Timer(1.0, self._reload_agent).start()
         except Exception as exc:
             write_json(status_path, {"state": "failed", "message": str(exc), "at": _now()})
         finally:
@@ -175,6 +175,29 @@ class HostControl:
         completed = self.run(["systemctl", action, unit])
         if completed.returncode != 0:
             raise RuntimeError(completed.stderr.strip() or f"systemctl {action} {unit} falhou")
+
+    def install_unit(self) -> None:
+        source = self.root / "agent" / "audio-endpoint-agent.service"
+        target = Path("/etc/systemd/system/audio-endpoint-agent.service")
+        if not source.is_file():
+            return
+        current = target.read_text(encoding="utf-8") if target.is_file() else ""
+        if current != source.read_text(encoding="utf-8"):
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, target)
+            self.run(["systemctl", "daemon-reload"])
+
+    def reconnect_app(self) -> None:
+        # The panel bind-mounts /run/audio-endpoint. Recreating that directory
+        # leaves the container on the old, empty one, so restart it after the socket exists.
+        self.run(["docker", "restart", "audio-endpoint"])
+
+    def _reload_agent(self) -> None:
+        try:
+            self.install_unit()
+        except Exception:
+            pass
+        self.run(["systemctl", "restart", "audio-endpoint-agent"])
 
     def ensure_a2dp_policy(self) -> None:
         source = self.root / "agent" / "wireplumber" / "51-a2dp-sink.lua"
@@ -330,11 +353,16 @@ def _now() -> str:
 def main() -> None:
     control = HostControl(ROOT)
     try:
+        control.install_unit()
+    except Exception:
+        pass
+    try:
         control.ensure_a2dp_policy()
     except Exception:
         pass
     threading.Thread(target=control.wifi.supervise, name="wifi-setup", daemon=True).start()
     server = AgentServer(SOCKET_PATH, control)
+    threading.Timer(1.0, control.reconnect_app).start()
     server.serve_forever()
 
 

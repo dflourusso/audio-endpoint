@@ -10,7 +10,7 @@ Environment=AUDIO_ENDPOINT_ROOT=/opt/audio-endpoint
 Environment=AGENT_SOCKET=/run/audio-endpoint/agent.sock
 Restart=on-failure
 RestartSec=2
-RuntimeDirectory=audio-endpoint
+ExecStartPre=/usr/bin/mkdir -p /run/audio-endpoint
 
 [Install]
 WantedBy=multi-user.target

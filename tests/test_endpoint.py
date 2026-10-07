@@ -1,4 +1,5 @@
 import json
+from pathlib import Path
 
 import httpx
 import pytest
@@ -417,6 +418,12 @@ def test_update_pulls_the_bridge_and_builds_the_local_image(tmp_path):
     assert docker_calls[1][-3:] == ["up", "-d", "--build"]
     status = json.loads((tmp_path / "data" / "update-status.json").read_text())
     assert status["state"] == "succeeded"
+
+
+def test_agent_unit_keeps_the_socket_directory():
+    text = (Path(__file__).resolve().parents[1] / "agent" / "audio-endpoint-agent.service").read_text(encoding="utf-8")
+    assert "RuntimeDirectory=" not in text
+    assert "/run/audio-endpoint" in text
 
 
 def test_agent_rejects_unknown_actions():
