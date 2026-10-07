@@ -28,6 +28,7 @@ def create_app(settings=None, bridge=None, agent=None) -> FastAPI:
     app.state.bluetooth = BluetoothService(
         app.state.bridge,
         restarter=lambda: app.state.agent.call("restart-bridge"),
+        audio_fix=lambda mac: app.state.agent.call("bluetooth-audio", mac=mac),
     )
 
     wifi_mode = {"at": 0.0, "mode": None}

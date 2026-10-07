@@ -15,6 +15,7 @@ from pathlib import Path
 from wifi_setup import WifiInputError, WifiManager
 
 HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+_MAC_RE = re.compile(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$")
 LOG_SOURCES = {
     "agent": "audio-endpoint-agent.service",
     "bluetooth": "bluetooth.service",
@@ -175,6 +176,55 @@ class HostControl:
         if completed.returncode != 0:
             raise RuntimeError(completed.stderr.strip() or f"systemctl {action} {unit} falhou")
 
+    def ensure_a2dp_policy(self) -> None:
+        source = self.root / "agent" / "wireplumber" / "51-a2dp-sink.lua"
+        if not source.is_file():
+            return
+        desired = source.read_text(encoding="utf-8")
+        target = Path("/etc/wireplumber/bluetooth.lua.d/51-audio-endpoint-a2dp.lua")
+        if target.is_file() and target.read_text(encoding="utf-8") == desired:
+            return
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(desired, encoding="utf-8")
+        self._restart_user_wireplumber()
+
+    def enable_a2dp(self, mac: str) -> None:
+        card = "bluez_card." + mac.upper().replace(":", "_")
+        completed = self._as_audio_user(["pactl", "set-card-profile", card, "a2dp-sink"])
+        if completed.returncode != 0:
+            raise RuntimeError(completed.stderr.strip() or "Não foi possível colocar a caixa no perfil de música.")
+
+    def _audio_uid(self) -> str:
+        env_file = self.root / ".env"
+        if env_file.is_file():
+            for line in env_file.read_text(encoding="utf-8").splitlines():
+                if line.startswith("AUDIO_UID="):
+                    uid = line.split("=", 1)[1].strip()
+                    if uid.isdigit():
+                        return uid
+        completed = self.run(["id", "-u", "audioendpoint"])
+        if completed.returncode == 0 and completed.stdout.strip().isdigit():
+            return completed.stdout.strip()
+        return "1000"
+
+    def _as_audio_user(self, args: list[str]):
+        uid = self._audio_uid()
+        return self.run(
+            [
+                "runuser",
+                "-u",
+                "audioendpoint",
+                "--",
+                "env",
+                f"XDG_RUNTIME_DIR=/run/user/{uid}",
+                f"DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus",
+                *args,
+            ]
+        )
+
+    def _restart_user_wireplumber(self) -> None:
+        self._as_audio_user(["systemctl", "--user", "restart", "wireplumber.service"])
+
     def _compose(self, *args: str) -> None:
         completed = self.run(["docker", "compose", "--project-directory", str(self.root), *args])
         if completed.returncode != 0:
@@ -195,6 +245,12 @@ def dispatch(payload: dict, control: HostControl) -> dict:
             return {"ok": True}
         if action == "restart-bluetooth":
             control.restart_bluetooth()
+            return {"ok": True}
+        if action == "bluetooth-audio":
+            mac = str(payload.get("mac") or "").strip().upper()
+            if not _MAC_RE.fullmatch(mac):
+                return {"ok": False, "error": "invalid_mac", "message": "MAC inválido."}
+            control.enable_a2dp(mac)
             return {"ok": True}
         if action == "restart-bridge":
             control.restart_bridge()
@@ -273,6 +329,10 @@ def _now() -> str:
 
 def main() -> None:
     control = HostControl(ROOT)
+    try:
+        control.ensure_a2dp_policy()
+    except Exception:
+        pass
     threading.Thread(target=control.wifi.supervise, name="wifi-setup", daemon=True).start()
     server = AgentServer(SOCKET_PATH, control)
     server.serve_forever()

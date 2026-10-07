@@ -1,7 +1,30 @@
 from fastapi import APIRouter, Request
 
+from app.bluetooth_service import live_rows
 from app.bridge import BridgeError
 from app.redact import redact
+
+
+def describe_playback(status: dict) -> dict:
+    players = []
+    for device in live_rows(status):
+        sink = str(device.get("sink_name") or "")
+        players.append(
+            {
+                "player_name": device.get("player_name"),
+                "mac": device.get("mac") or device.get("bluetooth_mac"),
+                "connected": bool(device.get("bluetooth_connected")),
+                "session_connected": bool(device.get("server_connected")),
+                "playing": bool(device.get("playing")),
+                "sink": sink,
+                "has_sink": bool(device.get("has_sink")) and "bluez" in sink.lower(),
+            }
+        )
+    session = any(player["session_connected"] or player["playing"] for player in players)
+    name = status.get("player_name")
+    if not name and players:
+        name = players[0]["player_name"]
+    return {"players": players, "session_connected": session, "player_name": name}
 
 router = APIRouter(prefix="/api")
 
@@ -23,12 +46,15 @@ def sendspin_status(request: Request):
             "startup": None,
         }
     startup = status.get("startup_progress") if isinstance(status.get("startup_progress"), dict) else None
+    playback = describe_playback(status)
     return {
         "reachable": True,
         "listening": (startup or {}).get("phase") in {None, "ready"} or (startup or {}).get("status") == "complete" or bool(health),
-        "connected": bool(status.get("connected") or status.get("ma_connected")),
+        "connected": bool(status.get("connected") or status.get("ma_connected") or playback["session_connected"]),
         "bluetooth_connected": bool(status.get("bluetooth_connected")),
-        "player_name": status.get("player_name"),
+        "player_name": playback["player_name"],
+        "session_connected": playback["session_connected"],
+        "playing": any(player["playing"] for player in playback["players"]),
         "startup": startup,
         "health": redact(health),
     }
@@ -42,21 +68,14 @@ def music_assistant_status(request: Request):
         runtime = bridge.runtime_info()
     except BridgeError as exc:
         return {"reachable": False, "message": exc.message}
-    devices = []
-    for device in status.get("devices") or []:
-        if isinstance(device, dict):
-            devices.append(
-                {
-                    "player_name": device.get("player_name"),
-                    "connected": bool(device.get("connected")),
-                    "mac": device.get("mac"),
-                }
-            )
+    playback = describe_playback(status)
     return {
         "reachable": True,
-        "ma_connected": bool(status.get("ma_connected")),
-        "player_name": status.get("player_name"),
-        "players": devices,
+        "ma_connected": bool(status.get("ma_connected")) or playback["session_connected"],
+        "session_connected": playback["session_connected"],
+        "playing": any(player["playing"] for player in playback["players"]),
+        "player_name": playback["player_name"],
+        "players": playback["players"],
         "runtime_mode": status.get("runtime_mode") or runtime.get("mode") or runtime.get("runtime_mode"),
         "guidance": redact(status.get("operator_guidance")),
         "startup": status.get("startup_progress"),

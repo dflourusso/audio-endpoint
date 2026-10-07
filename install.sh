@@ -43,6 +43,9 @@ usermod -aG audio,bluetooth audioendpoint || true
 audio_uid="$(id -u audioendpoint)"
 audio_gid="$(id -g audioendpoint)"
 
+install -d /etc/wireplumber/bluetooth.lua.d
+install -m 644 "${ROOT}/agent/wireplumber/51-a2dp-sink.lua" /etc/wireplumber/bluetooth.lua.d/51-audio-endpoint-a2dp.lua
+
 loginctl enable-linger audioendpoint || true
 systemctl start "user@${audio_uid}.service" || true
 install -d -m 700 -o audioendpoint -g audioendpoint "/run/user/${audio_uid}"

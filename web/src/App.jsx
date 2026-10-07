@@ -102,7 +102,7 @@ function Dashboard() {
         <Card label="Caixa conectada" value={data?.bluetooth?.connected_device?.name || "Nenhuma"} />
         <Card label="Sendspin" value={data?.sendspin?.reachable ? (data.sendspin.connected ? "Conectado" : "Anunciado") : "Indisponível"} />
         <Card label="Saída" value={current?.name || "Bluetooth"} />
-        <Card label="Music Assistant" value={data?.music?.ma_connected ? "Conectado" : "Sem conexão"} />
+        <Card label="Music Assistant" value={data?.music?.playing ? "Reproduzindo" : data?.music?.session_connected || data?.music?.ma_connected ? "Conectado" : "Aguardando"} />
         <Card label="Versão" value={system.project_version || "—"} />
       </section>
       <div className="stack" style={{ marginTop: 12 }}>
@@ -348,14 +348,19 @@ function MusicPage() {
       <Banner error={error} />
       {loading && !data ? <p>Carregando…</p> : (
         <section className="cards">
-          <Card label="Sendspin" value={data?.sendspin?.reachable ? "No ar" : "Sem resposta"} />
+          <Card label="Sendspin" value={data?.sendspin?.reachable ? (data?.music?.playing ? "Reproduzindo" : data?.sendspin?.connected ? "Conectado" : "No ar") : "Sem resposta"} />
           <Card label="Player" value={data?.sendspin?.player_name || data?.music?.player_name || "—"} />
-          <Card label="Conexão MA" value={data?.music?.ma_connected ? "Conectado" : "Aguardando"} />
+          <Card label="Conexão MA" value={data?.music?.playing ? "Reproduzindo" : data?.music?.session_connected || data?.music?.ma_connected ? "Conectado" : "Aguardando"} />
           <Card label="Modo" value={data?.music?.runtime_mode || "—"} />
           <article className="card wide">
             <span>Players anunciados</span>
             {(data?.music?.players || []).map((player) => (
-              <strong key={player.player_name || player.mac}>{player.player_name || player.mac} · {player.connected ? "conectado" : "parado"}</strong>
+              <strong key={player.player_name || player.mac}>
+                {player.player_name || player.mac}
+                {" · "}
+                {player.playing ? "reproduzindo" : player.session_connected ? "conectado" : "anunciado"}
+                {player.connected && !player.has_sink ? " · sem saída de áudio na caixa" : ""}
+              </strong>
             ))}
             {(data?.music?.players || []).length === 0 && <strong>Nenhum player ainda</strong>}
           </article>

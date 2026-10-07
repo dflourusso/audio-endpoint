@@ -4,7 +4,8 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.bluetooth_service import BluetoothService, choose_adapter, merge_devices
+from app.bluetooth_service import BluetoothService, choose_adapter, merge_devices, sinkless_speaker
+from app.routers.status import describe_playback
 from app.bridge import BridgeClient
 
 from app.audio import list_outputs, select_output, OutputNotSupported
@@ -200,6 +201,67 @@ def test_hostname_is_stored_in_lowercase():
     hostname_calls = [call for call in agent.calls if call[0] == "set-hostname"]
     assert hostname_calls == [("set-hostname", {"hostname": "audio-sala"})]
     assert bridge.config_data["BRIDGE_NAME"] == "audio-sala"
+
+
+def test_playing_session_is_visible_for_one_speaker():
+    status = {
+        "player_name": "JBL Bar 2.1 @ audio-suite",
+        "bluetooth_mac": "88:D0:39:0D:4B:FC",
+        "bluetooth_connected": True,
+        "server_connected": True,
+        "playing": True,
+        "ma_connected": False,
+        "has_sink": False,
+        "sink_name": "",
+    }
+    view = describe_playback(status)
+    assert view["session_connected"] is True
+    assert view["players"][0]["playing"] is True
+    assert view["players"][0]["has_sink"] is False
+    assert sinkless_speaker(status) == "88:D0:39:0D:4B:FC"
+
+
+def test_connected_speaker_without_audio_asks_for_the_music_profile():
+    mac = "88:D0:39:0D:4B:FC"
+    bridge = type("Bridge", (), {})()
+    bridge.config_data = {"BLUETOOTH_DEVICES": [{"mac": mac, "player_name": "JBL"}]}
+
+    def status():
+        return {
+            "bluetooth_mac": mac,
+            "bluetooth_connected": True,
+            "player_name": "JBL",
+            "has_sink": False,
+            "sink_name": "",
+        }
+
+    bridge.status = status
+    bridge.config = lambda: bridge.config_data
+    bridge.paired = lambda: [{"mac": mac, "name": "JBL"}]
+    fixed = []
+    service = BluetoothService(bridge, audio_fix=lambda value: fixed.append(value))
+    service.status()
+    assert fixed == [mac]
+    service.status()
+    assert fixed == [mac]
+
+
+def test_bluetooth_audio_rejects_a_bad_mac(tmp_path):
+    calls = []
+
+    def runner(args):
+        calls.append(args)
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    result = dispatch({"action": "bluetooth-audio", "mac": "caixa"}, HostControl(tmp_path, runner))
+    assert result["ok"] is False
+    assert calls == []
 
 
 def test_one_speaker_reports_the_bluetooth_link():

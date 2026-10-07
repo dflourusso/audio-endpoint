@@ -38,6 +38,17 @@ def live_rows(status: dict | None) -> list[dict]:
     return []
 
 
+def sinkless_speaker(status: dict | None) -> str:
+    for device in live_rows(status):
+        if not _bluetooth_connected(device):
+            continue
+        sink = str(device.get("sink_name") or "")
+        if device.get("has_sink") and "bluez" in sink.lower():
+            continue
+        return _live_mac(device)
+    return ""
+
+
 def missing_players(config: dict, status: dict | None) -> bool:
     fleet = {
         str(device.get("mac", "")).strip().upper()
@@ -107,16 +118,20 @@ def connected_device(devices: list[dict]) -> dict | None:
 
 
 class BluetoothService:
-    def __init__(self, bridge: BridgeClient, restarter=None):
+    def __init__(self, bridge: BridgeClient, restarter=None, audio_fix=None):
         self.bridge = bridge
         self._restarter = restarter
+        self._audio_fix = audio_fix
         self._players_restarted_at = 0.0
+        self._audio_fixed_at = 0.0
 
     def status(self) -> dict:
         snapshot = self._safe_status()
         config = self._safe_config()
         if snapshot is not None and missing_players(config, snapshot):
             self._restart_players_once()
+        elif snapshot is not None:
+            self._fix_audio_once(sinkless_speaker(snapshot))
         paired = self._safe_paired()
         devices = merge_devices(snapshot, paired, config)
         return {
@@ -205,6 +220,18 @@ class BluetoothService:
         self.bridge.save_config(config)
         self._restart_quietly()
         return True
+
+    def _fix_audio_once(self, mac: str) -> None:
+        if not mac or self._audio_fix is None:
+            return
+        now = time.monotonic()
+        if now - self._audio_fixed_at < 60:
+            return
+        self._audio_fixed_at = now
+        try:
+            self._audio_fix(mac)
+        except Exception:
+            return
 
     def _restart_players_once(self) -> None:
         now = time.monotonic()
