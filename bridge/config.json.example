@@ -1,0 +1,9 @@
+{
+  "CONFIG_SCHEMA_VERSION": 5,
+  "SENDSPIN_SERVER": "auto",
+  "BRIDGE_NAME": "",
+  "BLUETOOTH_DEVICES": [],
+  "AUTO_UPDATE": false,
+  "CHECK_UPDATES": false,
+  "TZ": "America/Sao_Paulo"
+}

@@ -1,0 +1,70 @@
+services:
+  sendspin-bridge:
+    image: ${BRIDGE_IMAGE}
+    container_name: sendspin-bridge
+    restart: unless-stopped
+    network_mode: host
+    volumes:
+      - /var/run/dbus:/var/run/dbus
+      - /run/user/${AUDIO_UID}:/run/user/${AUDIO_UID}
+      - ${AUDIO_ENDPOINT_ROOT}/bridge:/config
+    environment:
+      SENDSPIN_SERVER: ${SENDSPIN_SERVER:-auto}
+      TZ: ${TZ:-America/Sao_Paulo}
+      WEB_PORT: ${BRIDGE_WEB_PORT:-8080}
+      CONFIG_DIR: /config
+      AUDIO_UID: ${AUDIO_UID}
+      AUDIO_GID: ${AUDIO_GID}
+      PULSE_SERVER: unix:/run/user/${AUDIO_UID}/pulse/native
+      XDG_RUNTIME_DIR: /run/user/${AUDIO_UID}
+    devices:
+      - /dev/bus/usb:/dev/bus/usb
+    cap_add:
+      - NET_ADMIN
+      - NET_RAW
+    security_opt:
+      - apparmor:unconfined
+      - seccomp:unconfined
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  audio-endpoint:
+    build:
+      context: .
+      dockerfile: api/Dockerfile
+    image: audio-endpoint:${PROJECT_VERSION:-0.1.0}
+    container_name: audio-endpoint
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - sendspin-bridge
+    volumes:
+      - ${AUDIO_ENDPOINT_ROOT}/config:/data/config
+      - ${AUDIO_ENDPOINT_ROOT}/data:/data/state
+      - /run/audio-endpoint:/run/audio-endpoint
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /etc/hostname:/host/etc/hostname:ro
+      - /etc/os-release:/host/etc/os-release:ro
+    environment:
+      BRIDGE_URL: ${BRIDGE_URL:-http://127.0.0.1:8080}
+      BRIDGE_TOKEN: ${BRIDGE_TOKEN:-}
+      API_TOKEN: ${API_TOKEN:-}
+      AGENT_SOCKET: /run/audio-endpoint/agent.sock
+      CONFIG_DIR: /data/config
+      DATA_DIR: /data/state
+      HOST_PROC: /host/proc
+      HOST_SYS: /host/sys
+      HOST_HOSTNAME_FILE: /host/etc/hostname
+      HOST_OS_RELEASE: /host/etc/os-release
+      PROJECT_VERSION: ${PROJECT_VERSION:-0.1.0}
+      WEB_PORT: ${WEB_PORT:-80}
+      TZ: ${TZ:-America/Sao_Paulo}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

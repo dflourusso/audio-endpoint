@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+web/node_modules/
+web/dist/
+config/*
+!config/.gitkeep
+bridge/*
+!bridge/config.json.example
+data/*
+!data/.gitkeep
+*.log
+.DS_Store

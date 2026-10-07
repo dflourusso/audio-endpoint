@@ -1,0 +1,16 @@
+[Unit]
+Description=Audio Endpoint host agent
+After=network.target NetworkManager.service docker.service
+Wants=NetworkManager.service docker.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/audio-endpoint/agent/audio_endpoint_agent.py
+Environment=AUDIO_ENDPOINT_ROOT=/opt/audio-endpoint
+Environment=AGENT_SOCKET=/run/audio-endpoint/agent.sock
+Restart=on-failure
+RestartSec=2
+RuntimeDirectory=audio-endpoint
+
+[Install]
+WantedBy=multi-user.target

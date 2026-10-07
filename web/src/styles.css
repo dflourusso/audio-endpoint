@@ -1,0 +1,144 @@
+:root {
+  color-scheme: dark;
+  font-family: "Segoe UI", system-ui, sans-serif;
+  background: #10140f;
+  color: #f3f1ea;
+  line-height: 1.4;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  background: #10140f;
+}
+
+button, input, select {
+  font: inherit;
+}
+
+button {
+  min-height: 48px;
+  border: 0;
+  border-radius: 12px;
+  padding: 0 16px;
+  background: #e7c36a;
+  color: #1c1608;
+  font-weight: 650;
+}
+
+button.secondary { background: #243024; color: #f3f1ea; }
+button.danger { background: #8f3d32; color: #fff8f5; }
+button:disabled { opacity: 0.55; }
+
+input, select {
+  width: 100%;
+  min-height: 48px;
+  border-radius: 12px;
+  border: 1px solid #3c4638;
+  background: #171d17;
+  color: inherit;
+  padding: 0 12px;
+}
+
+.app {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 16px 16px 96px;
+}
+
+header h1 {
+  margin: 0;
+  font-size: 1.35rem;
+}
+
+header p {
+  margin: 4px 0 16px;
+  color: #c8c2b4;
+}
+
+.grid, .stack { display: grid; gap: 12px; }
+
+.cards {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.card, .row {
+  background: #1b221b;
+  border-radius: 16px;
+  padding: 14px;
+}
+
+.card span, .muted { color: #c8c2b4; font-size: 0.92rem; }
+.card strong, .row strong { display: block; margin-top: 4px; font-size: 1.05rem; word-break: break-word; }
+
+.wide { grid-column: 1 / -1; }
+
+.row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: center;
+}
+
+.actions { display: flex; flex-wrap: wrap; gap: 8px; }
+
+.banner {
+  padding: 12px 14px;
+  border-radius: 12px;
+  background: #3a2a1d;
+}
+
+.banner.error { background: #4a2420; }
+
+pre.logs {
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 360px;
+  overflow: auto;
+  background: #121712;
+  border-radius: 12px;
+  padding: 12px;
+  margin: 0;
+}
+
+nav {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 8px;
+  background: #171d17;
+  border-top: 1px solid #2c362c;
+}
+
+nav button {
+  flex: 1 1 30%;
+  min-height: 56px;
+  padding: 6px;
+  background: transparent;
+  color: #c8c2b4;
+  font-size: 0.75rem;
+  font-weight: 600;
+}
+
+nav button.active { color: #e7c36a; }
+
+@media (min-width: 800px) {
+  .app { padding-bottom: 32px; }
+  nav {
+    position: static;
+    max-width: 880px;
+    margin: 0 auto;
+    border: 0;
+    background: transparent;
+    padding: 16px 16px 0;
+  }
+  nav button { background: #1b221b; }
+  nav button.active { background: #2a3424; }
+}
