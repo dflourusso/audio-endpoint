@@ -20,7 +20,8 @@ export const api = {
     request("/api/bluetooth/pair", { method: "POST", body: JSON.stringify({ mac, name, adapter: adapter || "" }) }),
   pairResult: (jobId, mac, name) =>
     request(`/api/bluetooth/pair/${jobId}?mac=${encodeURIComponent(mac)}&name=${encodeURIComponent(name || "")}`),
-  connect: (mac) => request("/api/bluetooth/connect", { method: "POST", body: JSON.stringify({ mac }) }),
+  connect: (mac, playerName) =>
+    request("/api/bluetooth/connect", { method: "POST", body: JSON.stringify({ mac, player_name: playerName || "" }) }),
   disconnect: (mac) => request("/api/bluetooth/disconnect", { method: "POST", body: JSON.stringify({ mac }) }),
   forget: (mac) => request("/api/bluetooth/forget", { method: "POST", body: JSON.stringify({ mac }) }),
   outputs: () => request("/api/audio/outputs"),

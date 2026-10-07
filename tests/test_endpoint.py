@@ -134,7 +134,8 @@ class FakeBridge:
     def pair_result(self, job_id):
         return {"status": "done", "success": True, "mac": "AA:BB:CC:DD:EE:FF"}
 
-    def reconnect(self, mac):
+    def reconnect(self, mac, player_name=""):
+        self.reconnected = (mac, player_name)
         return {"ok": True}
 
     def disconnect(self, mac):
@@ -316,6 +317,49 @@ def test_bluetooth_audio_rejects_a_bad_mac(tmp_path):
     result = dispatch({"action": "bluetooth-audio", "mac": "caixa"}, HostControl(tmp_path, runner))
     assert result["ok"] is False
     assert calls == []
+
+
+def test_the_playing_speaker_is_the_one_on_the_panel():
+    devices = merge_devices(
+        {
+            "devices": [
+                {
+                    "bluetooth_mac": "88:D0:39:0D:4B:FC",
+                    "bluetooth_connected": True,
+                    "player_name": "JBL Bar 2.1 @ audio-suite",
+                    "playing": False,
+                },
+                {
+                    "bluetooth_mac": "4C:14:84:D5:47:59",
+                    "bluetooth_connected": True,
+                    "player_name": "SOM-pop @ audio-suite",
+                    "playing": True,
+                },
+            ]
+        },
+        [
+            {"mac": "88:D0:39:0D:4B:FC", "name": "JBL Bar 2.1"},
+            {"mac": "4C:14:84:D5:47:59", "name": "SOM-pop"},
+        ],
+        {
+            "BLUETOOTH_DEVICES": [
+                {"mac": "88:D0:39:0D:4B:FC", "player_name": "JBL Bar 2.1"},
+                {"mac": "4C:14:84:D5:47:59", "player_name": "SOM-pop"},
+            ]
+        },
+    )
+    playing = [device for device in devices if device["playing"]]
+    assert [device["name"] for device in playing] == ["SOM-pop"]
+    assert playing[0]["bridge_player"] == "SOM-pop @ audio-suite"
+    from app.bluetooth_service import connected_device
+
+    assert connected_device(devices)["name"] == "SOM-pop"
+
+
+def test_connect_names_the_player_when_several_are_paired():
+    bridge = FakeBridge()
+    BluetoothService(bridge).connect("4C:14:84:D5:47:59", "SOM-pop @ audio-suite")
+    assert bridge.reconnected == ("4C:14:84:D5:47:59", "SOM-pop @ audio-suite")
 
 
 def test_one_speaker_reports_the_bluetooth_link():

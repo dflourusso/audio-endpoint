@@ -99,7 +99,7 @@ function Dashboard() {
         <Card label="IP" value={system.ip || "—"} />
         <Card label="MAC" value={system.mac || "—"} />
         <Card label="Bluetooth" value={data?.bluetooth?.bridge_reachable ? "Bridge no ar" : "Bridge sem resposta"} />
-        <Card label="Caixa conectada" value={data?.bluetooth?.connected_device?.name || "Nenhuma"} />
+        <Card label={speakerLabel(data?.bluetooth)} value={speakerValue(data?.bluetooth)} />
         <Card label="Sendspin" value={data?.sendspin?.reachable ? (data.sendspin.connected ? "Conectado" : "Anunciado") : "Indisponível"} />
         <Card label="Saída" value={current?.name || "Bluetooth"} />
         <Card label="Music Assistant" value={data?.music?.playing ? "Reproduzindo" : data?.music?.session_connected || data?.music?.ma_connected ? "Conectado" : "Aguardando"} />
@@ -110,6 +110,22 @@ function Dashboard() {
       </div>
     </>
   );
+}
+
+function speakerLabel(status) {
+  const devices = status?.devices || [];
+  if (devices.some((device) => device.playing)) return "Tocando";
+  if (devices.filter((device) => device.connected).length > 1) return "Caixas conectadas";
+  return "Caixa conectada";
+}
+
+function speakerValue(status) {
+  const devices = status?.devices || [];
+  const playing = devices.filter((device) => device.playing);
+  if (playing.length) return playing.map((device) => device.name).join(", ");
+  const connected = devices.filter((device) => device.connected);
+  if (connected.length) return connected.map((device) => device.name).join(", ");
+  return status?.connected_device?.name || "Nenhuma";
 }
 
 function Card({ label, value }) {
@@ -262,7 +278,7 @@ function BluetoothPage() {
     <>
       <header>
         <h1>Bluetooth</h1>
-        <p>Caixa conectada: {data?.connected_device?.name || "nenhuma"}</p>
+        <p>{speakerLabel(data)}: {speakerValue(data)}</p>
       </header>
       <Banner error={error} />
       <div className="stack">
@@ -284,12 +300,12 @@ function BluetoothPage() {
             <span>
               {device.mac}
               {" · "}
-              {device.connected ? "Bluetooth conectado" : "Bluetooth desconectado"}
+              {device.playing ? "reproduzindo" : device.connected ? "Bluetooth conectado" : "Bluetooth desconectado"}
               {" · "}
               {device.announced ? "anunciada ao Music Assistant" : device.in_fleet ? "player ainda não subiu" : "só pareada"}
             </span>
             <div className="actions" style={{ marginTop: 10 }}>
-              <button className="secondary" disabled={Boolean(busy)} onClick={() => act(device.mac, () => api.connect(device.mac))}>Conectar</button>
+              <button className="secondary" disabled={Boolean(busy)} onClick={() => act(device.mac, () => api.connect(device.mac, device.bridge_player))}>Conectar</button>
               <button className="secondary" disabled={Boolean(busy)} onClick={() => act(device.mac, () => api.disconnect(device.mac))}>Desconectar</button>
               <button className="danger" disabled={Boolean(busy)} onClick={() => {
                 if (window.confirm(`Esquecer ${device.name}?`)) act(device.mac, () => api.forget(device.mac));

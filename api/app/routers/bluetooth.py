@@ -15,6 +15,7 @@ class PairBody(BaseModel):
 
 class MacBody(BaseModel):
     mac: str
+    player_name: str = ""
 
 
 @router.get("/status")
@@ -66,7 +67,7 @@ def bluetooth_connect(body: MacBody, request: Request):
         mac = normalize_mac(body.mac)
     except ValidationError as exc:
         return _error(exc)
-    return request.app.state.bluetooth.connect(mac)
+    return request.app.state.bluetooth.connect(mac, body.player_name)
 
 
 @router.post("/disconnect")

@@ -100,6 +100,8 @@ def _device_view(mac: str, item: dict, saved: dict, live: dict, in_fleet: bool) 
         "mac": mac,
         "name": _name_of(item) or _name_of(saved) or _name_of(live) or mac,
         "player_name": saved.get("player_name") or _name_of(live) or _name_of(item) or mac,
+        "bridge_player": str(live.get("player_name") or saved.get("player_name") or "").strip(),
+        "playing": bool(live.get("playing")),
         "paired": bool(item),
         "connected": connected,
         "in_fleet": in_fleet,
@@ -122,10 +124,11 @@ def choose_adapter(adapters: list) -> str:
 
 
 def connected_device(devices: list[dict]) -> dict | None:
-    for device in devices:
-        if device.get("connected"):
-            return {"mac": device["mac"], "name": device["name"]}
-    return None
+    playing = [device for device in devices if device.get("playing")]
+    chosen = playing or [device for device in devices if device.get("connected")]
+    if not chosen:
+        return None
+    return {"mac": chosen[0]["mac"], "name": chosen[0]["name"], "playing": bool(chosen[0].get("playing"))}
 
 
 class BluetoothService:
@@ -201,9 +204,9 @@ class BluetoothService:
             "mac": normalize_mac(mac),
         }
 
-    def connect(self, mac: str) -> dict:
+    def connect(self, mac: str, player_name: str = "") -> dict:
         mac = normalize_mac(mac)
-        self.bridge.reconnect(mac)
+        self.bridge.reconnect(mac, player_name.strip())
         return {"ok": True, "mac": mac}
 
     def disconnect(self, mac: str) -> dict:
