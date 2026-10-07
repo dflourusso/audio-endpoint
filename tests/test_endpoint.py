@@ -5,7 +5,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.bluetooth_service import BluetoothService, choose_adapter, merge_devices, sinkless_speaker
+from app.bluetooth_service import BluetoothService, auto_released_player, choose_adapter, merge_devices, sinkless_speaker
 from app.routers.status import describe_playback
 from app.bridge import BridgeClient
 
@@ -247,6 +247,59 @@ def test_connected_speaker_without_audio_asks_for_the_music_profile():
     assert fixed == [mac]
 
 
+def test_auto_released_speaker_is_reclaimed_once():
+    bridge = type("Bridge", (), {})()
+    bridge.config_data = {
+        "BLUETOOTH_DEVICES": [{"mac": "88:D0:39:0D:4B:FC", "player_name": "JBL", "released": True, "released_by": "auto"}]
+    }
+
+    def status():
+        return {
+            "player_name": "JBL Bar 2.1 @ audio-suite",
+            "bluetooth_mac": "88:D0:39:0D:4B:FC",
+            "bluetooth_connected": False,
+            "has_sink": True,
+            "sink_name": "bluez_output.88_D0_39_0D_4B_FC.1",
+            "bt_released_by": "auto",
+        }
+
+    bridge.status = status
+    bridge.config = lambda: bridge.config_data
+    bridge.paired = lambda: []
+    reclaimed = []
+    bridge.set_bt_management = lambda name, enabled: reclaimed.append((name, enabled)) or {"success": True}
+    service = BluetoothService(bridge)
+    service.status()
+    service.status()
+    assert reclaimed == [("JBL Bar 2.1 @ audio-suite", True)]
+    assert auto_released_player({"bt_released_by": "user", "player_name": "JBL"}, {}) == ""
+
+
+def test_console_pipewire_is_masked_so_the_speaker_stays_with_the_endpoint(tmp_path):
+    home = tmp_path / "orangepi"
+    home.mkdir()
+    (tmp_path / ".env").write_text("AUDIO_UID=997\n", encoding="utf-8")
+    calls = []
+
+    def runner(args):
+        calls.append(args)
+
+        class Result:
+            returncode = 0
+            stdout = f"orangepi:x:1000:1000::/Users/unused:/bin/bash\n" if args[:2] == ["getent", "passwd"] else ""
+            stderr = ""
+
+        if args[:2] == ["getent", "passwd"]:
+            Result.stdout = f"orangepi:x:1000:1000::{home}:/bin/bash\n"
+        return Result()
+
+    HostControl(tmp_path, runner).claim_bluetooth_audio()
+    link = home / ".config" / "systemd" / "user" / "wireplumber.service"
+    assert link.is_symlink()
+    assert link.readlink() == Path("/dev/null")
+    assert any(args[:3] == ["runuser", "-u", "audioendpoint"] and "wireplumber.service" in args for args in calls)
+
+
 def test_bluetooth_audio_rejects_a_bad_mac(tmp_path):
     calls = []
 
@@ -424,6 +477,8 @@ def test_agent_unit_keeps_the_socket_directory():
     text = (Path(__file__).resolve().parents[1] / "agent" / "audio-endpoint-agent.service").read_text(encoding="utf-8")
     assert "RuntimeDirectory=" not in text
     assert "/run/audio-endpoint" in text
+    policy = (Path(__file__).resolve().parents[1] / "agent" / "wireplumber" / "51-a2dp-sink.lua").read_text(encoding="utf-8")
+    assert "a2dp_source" in policy
 
 
 def test_agent_rejects_unknown_actions():

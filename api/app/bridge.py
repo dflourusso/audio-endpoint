@@ -101,6 +101,10 @@ class BridgeClient:
         data = self.request("GET", f"/api/bt/pair_new/result/{job_id}")
         return data if isinstance(data, dict) else {}
 
+    def set_bt_management(self, player_name: str, enabled: bool) -> dict:
+        data = self.request("POST", "/api/bt/management", json={"player_name": player_name, "enabled": enabled})
+        return data if isinstance(data, dict) else {}
+
     def reconnect(self, mac: str) -> dict:
         data = self.request("POST", "/api/bt/reconnect", json={"mac": mac})
         return data if isinstance(data, dict) else {}

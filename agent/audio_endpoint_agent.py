@@ -211,11 +211,73 @@ class HostControl:
         target.write_text(desired, encoding="utf-8")
         self._restart_user_wireplumber()
 
-    def enable_a2dp(self, mac: str) -> None:
-        card = "bluez_card." + mac.upper().replace(":", "_")
-        completed = self._as_audio_user(["pactl", "set-card-profile", card, "a2dp-sink"])
+    def claim_bluetooth_audio(self) -> None:
+        changed = False
+        for name, uid, gid, home in self._other_users():
+            if self._mask_pipewire(home, uid, gid):
+                changed = True
+            if self._stop_user_pipewire(name, uid):
+                changed = True
+        if changed:
+            self._restart_user_wireplumber()
+
+    def _other_users(self) -> list[tuple[str, str, str, str]]:
+        audio_uid = self._audio_uid()
+        completed = self.run(["getent", "passwd"])
         if completed.returncode != 0:
-            raise RuntimeError(completed.stderr.strip() or "Não foi possível colocar a caixa no perfil de música.")
+            return []
+        users = []
+        for line in completed.stdout.splitlines():
+            parts = line.split(":")
+            if len(parts) < 6 or not parts[2].isdigit() or not parts[3].isdigit():
+                continue
+            name, uid, gid, home = parts[0], parts[2], parts[3], parts[5]
+            if uid == audio_uid or name in {"audioendpoint", "root", "nobody"} or int(uid) < 1000:
+                continue
+            if not home.startswith("/") or home in {"/", "/root", "/nonexistent"}:
+                continue
+            users.append((name, uid, gid, home))
+        return users
+
+    def _mask_pipewire(self, home: str, uid: str, gid: str) -> bool:
+        directory = Path(home) / ".config" / "systemd" / "user"
+        directory.mkdir(parents=True, exist_ok=True)
+        changed = False
+        for unit in ("pipewire.socket", "pipewire.service", "pipewire-pulse.socket", "pipewire-pulse.service", "wireplumber.service"):
+            link = directory / unit
+            if link.is_symlink() and os.readlink(link) == "/dev/null":
+                continue
+            if link.exists() or link.is_symlink():
+                link.unlink()
+            link.symlink_to("/dev/null")
+            changed = True
+        if os.geteuid() == 0:
+            os.chown(directory, int(uid), int(gid))
+            for child in directory.iterdir():
+                os.lchown(child, int(uid), int(gid))
+        return changed
+
+    def _stop_user_pipewire(self, name: str, uid: str) -> bool:
+        if not Path(f"/run/user/{uid}").is_dir():
+            return False
+        active = self._as_user(name, uid, ["systemctl", "--user", "is-active", "wireplumber.service"])
+        if active.stdout.strip() != "active":
+            return False
+        self._as_user(
+            name,
+            uid,
+            [
+                "systemctl",
+                "--user",
+                "stop",
+                "pipewire.socket",
+                "pipewire.service",
+                "pipewire-pulse.socket",
+                "pipewire-pulse.service",
+                "wireplumber.service",
+            ],
+        )
+        return True
 
     def _audio_uid(self) -> str:
         env_file = self.root / ".env"
@@ -231,12 +293,14 @@ class HostControl:
         return "1000"
 
     def _as_audio_user(self, args: list[str]):
-        uid = self._audio_uid()
+        return self._as_user("audioendpoint", self._audio_uid(), args)
+
+    def _as_user(self, name: str, uid: str, args: list[str]):
         return self.run(
             [
                 "runuser",
                 "-u",
-                "audioendpoint",
+                name,
                 "--",
                 "env",
                 f"XDG_RUNTIME_DIR=/run/user/{uid}",
@@ -273,7 +337,7 @@ def dispatch(payload: dict, control: HostControl) -> dict:
             mac = str(payload.get("mac") or "").strip().upper()
             if not _MAC_RE.fullmatch(mac):
                 return {"ok": False, "error": "invalid_mac", "message": "MAC inválido."}
-            control.enable_a2dp(mac)
+            control.claim_bluetooth_audio()
             return {"ok": True}
         if action == "restart-bridge":
             control.restart_bridge()
@@ -358,6 +422,10 @@ def main() -> None:
         pass
     try:
         control.ensure_a2dp_policy()
+    except Exception:
+        pass
+    try:
+        control.claim_bluetooth_audio()
     except Exception:
         pass
     threading.Thread(target=control.wifi.supervise, name="wifi-setup", daemon=True).start()

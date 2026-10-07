@@ -38,6 +38,17 @@ def live_rows(status: dict | None) -> list[dict]:
     return []
 
 
+def auto_released_player(status: dict | None, config: dict | None) -> str:
+    if str((status or {}).get("bt_released_by") or "") == "auto":
+        name = str((status or {}).get("player_name") or "")
+        if name:
+            return name
+    for device in (config or {}).get("BLUETOOTH_DEVICES") or []:
+        if isinstance(device, dict) and device.get("released") and device.get("released_by") == "auto":
+            return str(device.get("player_name") or (status or {}).get("player_name") or "")
+    return ""
+
+
 def sinkless_speaker(status: dict | None) -> str:
     for device in live_rows(status):
         if not _bluetooth_connected(device):
@@ -124,6 +135,7 @@ class BluetoothService:
         self._audio_fix = audio_fix
         self._players_restarted_at = 0.0
         self._audio_fixed_at = 0.0
+        self._reclaimed_at = 0.0
 
     def status(self) -> dict:
         snapshot = self._safe_status()
@@ -132,6 +144,7 @@ class BluetoothService:
             self._restart_players_once()
         elif snapshot is not None:
             self._fix_audio_once(sinkless_speaker(snapshot))
+            self._reclaim_once(auto_released_player(snapshot, config))
         paired = self._safe_paired()
         devices = merge_devices(snapshot, paired, config)
         return {
@@ -220,6 +233,18 @@ class BluetoothService:
         self.bridge.save_config(config)
         self._restart_quietly()
         return True
+
+    def _reclaim_once(self, player_name: str) -> None:
+        if not player_name:
+            return
+        now = time.monotonic()
+        if now - self._reclaimed_at < 60:
+            return
+        self._reclaimed_at = now
+        try:
+            self.bridge.set_bt_management(player_name, True)
+        except Exception:
+            return
 
     def _fix_audio_once(self, mac: str) -> None:
         if not mac or self._audio_fix is None:
