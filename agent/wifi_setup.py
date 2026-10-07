@@ -113,11 +113,12 @@ class WifiManager:
         self._timer = clock()
 
     def status(self) -> dict:
+        uplink = self._uplink_unlocked()
         with self._lock:
             return {
                 "ok": True,
                 "mode": self.mode,
-                "uplink": self._uplink_unlocked(),
+                "uplink": uplink,
                 "ssid": AP_SSID,
                 "address": AP_ADDRESS,
                 "message": self.message,

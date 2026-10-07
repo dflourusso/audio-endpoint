@@ -4,7 +4,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.bluetooth_service import choose_adapter
+from app.bluetooth_service import BluetoothService, choose_adapter, merge_devices
 from app.bridge import BridgeClient
 
 from app.audio import list_outputs, select_output, OutputNotSupported
@@ -200,6 +200,46 @@ def test_hostname_is_stored_in_lowercase():
     hostname_calls = [call for call in agent.calls if call[0] == "set-hostname"]
     assert hostname_calls == [("set-hostname", {"hostname": "audio-sala"})]
     assert bridge.config_data["BRIDGE_NAME"] == "audio-sala"
+
+
+def test_one_speaker_reports_the_bluetooth_link():
+    devices = merge_devices(
+        {
+            "bluetooth_mac": "88:D0:39:0D:4B:FC",
+            "bluetooth_connected": True,
+            "player_name": "JBL Bar 2.1",
+        },
+        [{"mac": "88:D0:39:0D:4B:FC", "name": "JBL Bar 2.1"}],
+        {"BLUETOOTH_DEVICES": [{"mac": "88:D0:39:0D:4B:FC", "player_name": "JBL Bar 2.1", "enabled": True}]},
+    )
+    assert devices[0]["connected"] is True
+    assert devices[0]["announced"] is True
+
+
+def test_saved_speaker_without_a_running_player_asks_for_a_restart():
+    bridge = type("Bridge", (), {})()
+    bridge.config_data = {"BLUETOOTH_DEVICES": [{"mac": "88:D0:39:0D:4B:FC", "player_name": "JBL Bar 2.1"}]}
+    bridge.restarts = []
+
+    def status():
+        return {"devices": []}
+
+    def config():
+        return bridge.config_data
+
+    def paired():
+        return [{"mac": "88:D0:39:0D:4B:FC", "name": "JBL Bar 2.1"}]
+
+    bridge.status = status
+    bridge.config = config
+    bridge.paired = paired
+    service = BluetoothService(bridge, restarter=lambda: bridge.restarts.append("bridge"))
+    first = service.status()
+    assert first["devices"][0]["connected"] is False
+    assert first["devices"][0]["announced"] is False
+    assert bridge.restarts == ["bridge"]
+    service.status()
+    assert bridge.restarts == ["bridge"]
 
 
 def test_scan_sends_the_only_adapter():

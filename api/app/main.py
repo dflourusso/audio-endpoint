@@ -1,3 +1,5 @@
+import time
+
 from fastapi import FastAPI, Request
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -23,7 +25,25 @@ def create_app(settings=None, bridge=None, agent=None) -> FastAPI:
     app.state.settings = settings
     app.state.bridge = bridge or BridgeClient(settings.bridge_url, settings.bridge_token)
     app.state.agent = agent or AgentClient(settings.agent_socket)
-    app.state.bluetooth = BluetoothService(app.state.bridge)
+    app.state.bluetooth = BluetoothService(
+        app.state.bridge,
+        restarter=lambda: app.state.agent.call("restart-bridge"),
+    )
+
+    wifi_mode = {"at": 0.0, "mode": None}
+
+    def current_wifi_mode() -> str | None:
+        now = time.monotonic()
+        if wifi_mode["mode"] is not None and now - wifi_mode["at"] < 5:
+            return wifi_mode["mode"]
+        try:
+            state = app.state.agent.call("wifi-status", timeout=2)
+        except AgentError:
+            return wifi_mode["mode"]
+        mode = state.get("mode")
+        wifi_mode["at"] = now
+        wifi_mode["mode"] = mode
+        return mode
 
     @app.middleware("http")
     async def api_token(request: Request, call_next):
@@ -34,11 +54,7 @@ def create_app(settings=None, bridge=None, agent=None) -> FastAPI:
             if header != f"Bearer {token}":
                 return JSONResponse(status_code=401, content={"error": "unauthorized", "message": "Não autorizado."})
         if path.startswith("/api/") and path not in SETUP_ALLOWED:
-            try:
-                wifi_state = request.app.state.agent.call("wifi-status")
-            except AgentError:
-                wifi_state = None
-            if wifi_state and wifi_state.get("mode") == "access-point":
+            if current_wifi_mode() == "access-point":
                 return JSONResponse(
                     status_code=403,
                     content={

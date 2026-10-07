@@ -13,12 +13,12 @@ class AgentClient:
     def __init__(self, socket_path: str):
         self.socket_path = socket_path
 
-    def call(self, action: str, **fields) -> dict:
+    def call(self, action: str, timeout: float = 90, **fields) -> dict:
         payload = {"action": action, **fields}
         raw = json.dumps(payload).encode("utf-8")
         try:
             with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                client.settimeout(90)
+                client.settimeout(timeout)
                 client.connect(self.socket_path)
                 client.sendall(raw)
                 client.shutdown(socket.SHUT_WR)

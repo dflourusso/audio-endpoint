@@ -1,3 +1,5 @@
+import time
+
 from app.bridge import BridgeClient, BridgeError
 from app.fleet import remove_device, set_bridge_name, upsert_device
 from app.validation import normalize_mac
@@ -11,16 +13,50 @@ def _name_of(device: dict) -> str:
     return ""
 
 
+def _live_mac(device: dict) -> str:
+    return str(device.get("mac") or device.get("bluetooth_mac") or "").strip().upper()
+
+
+def _bluetooth_connected(device: dict) -> bool:
+    if not device:
+        return False
+    if "bluetooth_connected" in device:
+        return bool(device["bluetooth_connected"])
+    return device.get("connected") is True
+
+
+def live_rows(status: dict | None) -> list[dict]:
+    if not isinstance(status, dict):
+        return []
+    listed = status.get("devices")
+    if isinstance(listed, list):
+        rows = [item for item in listed if isinstance(item, dict) and _live_mac(item)]
+        if rows:
+            return rows
+    if _live_mac(status):
+        return [status]
+    return []
+
+
+def missing_players(config: dict, status: dict | None) -> bool:
+    fleet = {
+        str(device.get("mac", "")).strip().upper()
+        for device in (config.get("BLUETOOTH_DEVICES") or [])
+        if isinstance(device, dict) and device.get("mac")
+    }
+    if not fleet:
+        return False
+    live = {_live_mac(device) for device in live_rows(status)}
+    return not fleet <= live
+
+
 def merge_devices(status: dict, paired: list, config: dict) -> list[dict]:
     fleet = {
         str(device.get("mac", "")).upper(): device
         for device in (config.get("BLUETOOTH_DEVICES") or [])
         if isinstance(device, dict) and device.get("mac")
     }
-    runtime = {}
-    for device in status.get("devices") or []:
-        if isinstance(device, dict) and device.get("mac"):
-            runtime[str(device["mac"]).upper()] = device
+    runtime = {_live_mac(device): device for device in live_rows(status) if _live_mac(device)}
     found: dict[str, dict] = {}
     for item in paired:
         if not isinstance(item, dict) or not item.get("mac"):
@@ -28,30 +64,26 @@ def merge_devices(status: dict, paired: list, config: dict) -> list[dict]:
         mac = str(item["mac"]).upper()
         live = runtime.get(mac, {})
         saved = fleet.get(mac, {})
-        connected = bool(item.get("connected") or live.get("bluetooth_connected") or live.get("connected"))
-        found[mac] = {
-            "mac": mac,
-            "name": _name_of(item) or _name_of(saved) or _name_of(live) or mac,
-            "player_name": saved.get("player_name") or _name_of(live) or _name_of(item) or mac,
-            "paired": True,
-            "connected": connected,
-            "in_fleet": mac in fleet,
-            "enabled": saved.get("enabled", True) if mac in fleet else False,
-        }
+        found[mac] = _device_view(mac, item, saved, live, mac in fleet)
     for mac, saved in fleet.items():
         if mac in found:
             continue
-        live = runtime.get(mac, {})
-        found[mac] = {
-            "mac": mac,
-            "name": saved.get("player_name") or _name_of(live) or mac,
-            "player_name": saved.get("player_name") or mac,
-            "paired": False,
-            "connected": bool(live.get("bluetooth_connected") or live.get("connected")),
-            "in_fleet": True,
-            "enabled": bool(saved.get("enabled", True)),
-        }
+        found[mac] = _device_view(mac, {}, saved, runtime.get(mac, {}), True)
     return sorted(found.values(), key=lambda device: (not device["connected"], device["name"].lower()))
+
+
+def _device_view(mac: str, item: dict, saved: dict, live: dict, in_fleet: bool) -> dict:
+    connected = _bluetooth_connected(live) or _bluetooth_connected(item)
+    return {
+        "mac": mac,
+        "name": _name_of(item) or _name_of(saved) or _name_of(live) or mac,
+        "player_name": saved.get("player_name") or _name_of(live) or _name_of(item) or mac,
+        "paired": bool(item),
+        "connected": connected,
+        "in_fleet": in_fleet,
+        "announced": bool(live),
+        "enabled": saved.get("enabled", True) if in_fleet else False,
+    }
 
 
 def choose_adapter(adapters: list) -> str:
@@ -75,12 +107,16 @@ def connected_device(devices: list[dict]) -> dict | None:
 
 
 class BluetoothService:
-    def __init__(self, bridge: BridgeClient):
+    def __init__(self, bridge: BridgeClient, restarter=None):
         self.bridge = bridge
+        self._restarter = restarter
+        self._players_restarted_at = 0.0
 
     def status(self) -> dict:
         snapshot = self._safe_status()
         config = self._safe_config()
+        if snapshot is not None and missing_players(config, snapshot):
+            self._restart_players_once()
         paired = self._safe_paired()
         devices = merge_devices(snapshot, paired, config)
         return {
@@ -169,6 +205,19 @@ class BluetoothService:
         self.bridge.save_config(config)
         self._restart_quietly()
         return True
+
+    def _restart_players_once(self) -> None:
+        now = time.monotonic()
+        if now - self._players_restarted_at < 60:
+            return
+        self._players_restarted_at = now
+        if self._restarter is not None:
+            try:
+                self._restarter()
+                return
+            except Exception:
+                pass
+        self._restart_quietly()
 
     def _restart_quietly(self) -> None:
         try:

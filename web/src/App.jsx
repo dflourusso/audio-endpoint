@@ -281,7 +281,13 @@ function BluetoothPage() {
         {devices.map((device) => (
           <article className="card" key={device.mac}>
             <strong>{device.name}</strong>
-            <span>{device.mac} · {device.connected ? "conectado" : "desconectado"} · {device.in_fleet ? "no Music Assistant" : "só pareado"}</span>
+            <span>
+              {device.mac}
+              {" · "}
+              {device.connected ? "Bluetooth conectado" : "Bluetooth desconectado"}
+              {" · "}
+              {device.announced ? "anunciada ao Music Assistant" : device.in_fleet ? "player ainda não subiu" : "só pareada"}
+            </span>
             <div className="actions" style={{ marginTop: 10 }}>
               <button className="secondary" disabled={Boolean(busy)} onClick={() => act(device.mac, () => api.connect(device.mac))}>Conectar</button>
               <button className="secondary" disabled={Boolean(busy)} onClick={() => act(device.mac, () => api.disconnect(device.mac))}>Desconectar</button>
