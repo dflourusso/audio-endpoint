@@ -36,6 +36,7 @@ services:
       context: .
       dockerfile: api/Dockerfile
     image: audio-endpoint:${PROJECT_VERSION:-0.1.0}
+    pull_policy: build
     container_name: audio-endpoint
     restart: unless-stopped
     network_mode: host

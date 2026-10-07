@@ -134,7 +134,9 @@ class HostControl:
             if pull.returncode != 0:
                 self._write_update("failed", pull.stderr.strip() or pull.stdout.strip() or "git pull falhou")
                 return
-            pulled = self.run(["docker", "compose", "--project-directory", str(self.root), "pull"])
+            pulled = self.run(
+                ["docker", "compose", "--project-directory", str(self.root), "pull", "sendspin-bridge"]
+            )
             if pulled.returncode != 0:
                 self._write_update("failed", pulled.stderr.strip() or "docker compose pull falhou")
                 return
@@ -143,6 +145,7 @@ class HostControl:
                 self._write_update("failed", up.stderr.strip() or "docker compose up falhou")
                 return
             self._write_update("succeeded", "Atualização concluída")
+            threading.Timer(1.0, lambda: self.run(["systemctl", "restart", "audio-endpoint-agent"])).start()
         except Exception as exc:
             write_json(status_path, {"state": "failed", "message": str(exc), "at": _now()})
         finally:

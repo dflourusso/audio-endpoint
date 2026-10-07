@@ -108,11 +108,11 @@ Na placa, dentro de `/opt/audio-endpoint`:
 
 ```bash
 git pull --ff-only
-docker compose pull
+docker compose pull sendspin-bridge
 docker compose up -d --build
 ```
 
-O botão Atualizar faz a mesma sequência pelo agente. Ele recusa uma árvore Git suja ou um pull que não seja fast-forward, copia `.env`, `config/` e `bridge/` para `data/backups/<data>/` e só então sobe os containers. Não há reboot automático. A interface pode cair por alguns segundos enquanto a imagem da API é recriada. O progresso fica em `data/update-status.json`.
+O botão Atualizar faz a mesma sequência pelo agente. A imagem `audio-endpoint` é compilada na placa; só a imagem do bridge é baixada. O agente recusa uma árvore Git suja ou um pull que não seja fast-forward, copia `.env`, `config/` e `bridge/` para `data/backups/<data>/` e só então sobe os containers. Não há reboot automático. A interface pode cair por alguns segundos enquanto a imagem da API é recriada. O progresso fica em `data/update-status.json`.
 
 A tag do bridge está no `.env` (`BRIDGE_IMAGE`). Atualizar o bridge é mudar essa tag no Git e publicar. `latest` não é usado, para uma placa não mudar de versão sozinha.
 

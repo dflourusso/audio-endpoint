@@ -296,6 +296,27 @@ def test_update_does_not_pull_a_dirty_tree(tmp_path):
     assert not any(args[0] == "docker" for args in calls)
 
 
+def test_update_pulls_the_bridge_and_builds_the_local_image(tmp_path):
+    calls = []
+
+    def runner(args):
+        calls.append(args)
+
+        class Result:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+
+        return Result()
+
+    HostControl(tmp_path, runner)._update()
+    docker_calls = [args for args in calls if args and args[0] == "docker"]
+    assert docker_calls[0][-2:] == ["pull", "sendspin-bridge"]
+    assert docker_calls[1][-3:] == ["up", "-d", "--build"]
+    status = json.loads((tmp_path / "data" / "update-status.json").read_text())
+    assert status["state"] == "succeeded"
+
+
 def test_agent_rejects_unknown_actions():
     response = dispatch({"action": "bash"}, HostControl("/tmp"))
     assert response["ok"] is False
