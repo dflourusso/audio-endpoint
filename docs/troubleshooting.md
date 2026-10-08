@@ -63,11 +63,36 @@ A página Music Assistant desta interface mostra `ma_connected`. Se estiver agua
 
 O nome exibido é o nome do player mais o `BRIDGE_NAME`. Mudar o hostname pela nossa interface atualiza esse sufixo.
 
+## O iPhone não vê o AirPlay
+
+O anúncio usa o Avahi do host. Não suba outro Avahi.
+
+```bash
+docker ps --filter name=shairport-sync
+docker logs --tail 80 shairport-sync
+avahi-browse -rt _airplay._tcp
+```
+
+O nome no iPhone é o do player mais o hostname, por exemplo `Sala @ audio-sala`. Cada caixa da frota é um anúncio. Sem caixa na frota, a busca não lista este aparelho.
+
+Cada saída `airplay_` seguida do MAC precisa existir no PipeWire do usuário `audioendpoint`. Sem ela o iPhone não ouve nada quando a caixa está desligada, e também não ouve quando ela volta.
+
+```bash
+sudo -u audioendpoint XDG_RUNTIME_DIR=/run/user/$(id -u audioendpoint) pactl list short sinks | grep airplay_
+sudo -u audioendpoint XDG_RUNTIME_DIR=/run/user/$(id -u audioendpoint) systemctl --user status audio-endpoint-airplay-link.service
+```
+
+O segundo comando pode falhar se o linger não estiver ativo. `loginctl enable-linger audioendpoint` e reinicie o serviço do usuário.
+
+## A caixa não liga quando o AirPlay começa
+
+O webhook fica na página Bluetooth, no campo da caixa que precisa ligar. Vazio não chama ninguém. O valor não entra no Git. `AIRPLAY_WEBHOOK_URL` no `.env` não dispara mais. Use o endereço local, `http://<home-assistant>:8123/api/webhook/<identificador>`. O identificador é o segredo. Não use o endereço da Nabu Casa.
+
+A mesma automação pausa o player do Music Assistant. Sem essa pausa, a fila continua contando sem sair som até o AirPlay acabar.
+
 ## Spotify não lista a caixa
 
-O Orange Pi não anuncia Spotify Connect. Quem publica o dispositivo é o plugin Spotify Connect do Music Assistant. Marque o player do bridge nesse plugin. Se o Music Assistant estiver desligado, a caixa some do aplicativo do Spotify.
-
-Contas Premium criadas depois de dezembro de 2024 devem usar o motor Spotify Soloist, não o go-librespot.
+No iPhone, o Spotify sai pelo AirPlay do sistema. Não há Spotify Connect nesta placa. No Android, o celular conecta direto na caixa Bluetooth. O plugin do Music Assistant continua sendo o caminho para a biblioteca dele sincronizar a casa.
 
 ## Problemas de áudio
 
@@ -91,7 +116,7 @@ docker compose --project-directory /opt/audio-endpoint ps
 docker compose --project-directory /opt/audio-endpoint logs --tail 80
 ```
 
-Os dois serviços usam `restart: unless-stopped` e a rede do host. Se a API não abrir na porta 80, veja se outro processo já escuta essa porta. O bridge usa 8080 e, por caixa, portas a partir de 8928.
+Os dois containers de áudio e a API usam `restart: unless-stopped` e a rede do host. Se a API não abrir na porta 80, veja se outro processo já escuta essa porta. O bridge usa 8080 e, por caixa, portas a partir de 8928. O AirPlay 2 usa 7000, e o NQPTP usa 319 e 320. Essas portas ficam só neste aparelho.
 
 Uma atualização interrompida não apaga `bridge/` nem `.env`. O estado fica em `/opt/audio-endpoint/data/update-status.json`. Para voltar:
 

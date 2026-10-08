@@ -72,6 +72,7 @@ def change_hostname(body: HostnameBody, request: Request):
         request.app.state.bluetooth.set_bridge_hostname(hostname)
     except Exception:
         warning = "O hostname do Linux mudou, mas o nome do bridge não foi atualizado."
+    request.app.state.speakers.republish(hostname)
     return {"ok": True, "hostname": hostname, "mdns": f"{hostname}.local", "warning": warning}
 
 

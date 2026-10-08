@@ -152,6 +152,7 @@ class BluetoothService:
         devices = merge_devices(snapshot, paired, config)
         return {
             "bridge_reachable": snapshot is not None,
+            "fleet_known": isinstance(config.get("BLUETOOTH_DEVICES"), list),
             "connected_device": connected_device(devices),
             "paired_count": sum(1 for device in devices if device["paired"]),
             "devices": devices,

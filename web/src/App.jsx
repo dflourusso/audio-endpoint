@@ -213,6 +213,37 @@ function WifiPage({ onConnected }) {
   );
 }
 
+function WebhookField({ device, busy, onSave }) {
+  const [value, setValue] = useState(device.airplay_webhook || "");
+  useEffect(() => {
+    setValue(device.airplay_webhook || "");
+  }, [device.airplay_webhook]);
+  if (!device.in_fleet) return null;
+  return (
+    <form
+      onSubmit={(event) => {
+        event.preventDefault();
+        onSave(device.mac, value);
+      }}
+      style={{ marginTop: 10 }}
+    >
+      <span>AirPlay: {device.airplay_name || "—"}</span>
+      <label className="muted" htmlFor={`hook-${device.mac}`}>Webhook ao começar o AirPlay</label>
+      <input
+        id={`hook-${device.mac}`}
+        value={value}
+        placeholder="Opcional. Vazio não chama ninguém."
+        onChange={(event) => setValue(event.target.value)}
+        autoComplete="off"
+        spellCheck="false"
+      />
+      <div className="actions" style={{ marginTop: 8 }}>
+        <button className="secondary" type="submit" disabled={Boolean(busy)}>Salvar webhook</button>
+      </div>
+    </form>
+  );
+}
+
 function BluetoothPage() {
   const { data, error, reload, setError } = useLoad(api.bluetoothStatus);
   const [found, setFound] = useState([]);
@@ -304,6 +335,13 @@ function BluetoothPage() {
               {" · "}
               {device.announced ? "anunciada ao Music Assistant" : device.in_fleet ? "player ainda não subiu" : "só pareada"}
             </span>
+            {device.in_fleet && (
+              <WebhookField
+                device={device}
+                busy={busy}
+                onSave={(mac, webhook) => act(mac, () => api.airplayWebhook(mac, webhook))}
+              />
+            )}
             <div className="actions" style={{ marginTop: 10 }}>
               <button className="secondary" disabled={Boolean(busy)} onClick={() => act(device.mac, () => api.connect(device.mac, device.bridge_player))}>Conectar</button>
               <button className="secondary" disabled={Boolean(busy)} onClick={() => act(device.mac, () => api.disconnect(device.mac))}>Desconectar</button>
@@ -352,14 +390,16 @@ function AudioPage() {
 
 function MusicPage() {
   const { data, error, loading, reload } = useLoad(async () => {
-    const [sendspin, music] = await Promise.all([api.sendspin(), api.musicAssistant()]);
-    return { sendspin, music };
+    const [sendspin, music, airplay] = await Promise.all([api.sendspin(), api.musicAssistant(), api.airplay()]);
+    return { sendspin, music, airplay };
   });
+  const names = data?.airplay?.names || [];
+  const airplayName = names.length ? names.join(", ") : "—";
   return (
     <>
       <header>
-        <h1>Music Assistant</h1>
-        <p>O Spotify Connect é ligado no servidor do Music Assistant. A caixa aparece lá com o nome do player.</p>
+        <h1>Música</h1>
+        <p>O Music Assistant continua pelo Sendspin. No iPhone, cada caixa da frota aparece como um AirPlay com o nome do player.</p>
       </header>
       <Banner error={error} />
       {loading && !data ? <p>Carregando…</p> : (
@@ -368,6 +408,8 @@ function MusicPage() {
           <Card label="Player" value={data?.sendspin?.player_name || data?.music?.player_name || "—"} />
           <Card label="Conexão MA" value={data?.music?.playing ? "Reproduzindo" : data?.music?.session_connected || data?.music?.ma_connected ? "Conectado" : "Aguardando"} />
           <Card label="Modo" value={data?.music?.runtime_mode || "—"} />
+          <Card label="AirPlay" value={data?.airplay?.advertising ? airplayName : "Fora do ar"} />
+          <Card label="Sessão AirPlay" value={data?.airplay?.playing ? "Reproduzindo" : "Parada"} />
           <article className="card wide">
             <span>Players anunciados</span>
             {(data?.music?.players || []).map((player) => (

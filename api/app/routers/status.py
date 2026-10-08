@@ -79,5 +79,4 @@ def music_assistant_status(request: Request):
         "runtime_mode": status.get("runtime_mode") or runtime.get("mode") or runtime.get("runtime_mode"),
         "guidance": redact(status.get("operator_guidance")),
         "startup": status.get("startup_progress"),
-        "spotify_connect": "Configurado no Music Assistant, não neste aparelho.",
     }

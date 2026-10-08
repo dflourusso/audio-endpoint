@@ -63,7 +63,40 @@ services:
       HOST_OS_RELEASE: /host/etc/os-release
       PROJECT_VERSION: ${PROJECT_VERSION:-0.1.0}
       WEB_PORT: ${WEB_PORT:-80}
+      AIRPLAY_WEBHOOK_URL: ${AIRPLAY_WEBHOOK_URL:-}
       TZ: ${TZ:-America/Sao_Paulo}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  shairport-sync:
+    image: ${SHAIRPORT_IMAGE:-mikebrady/shairport-sync:5.5.2}
+    container_name: shairport-sync
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - audio-endpoint
+    cap_add:
+      - SYS_NICE
+      - NET_BIND_SERVICE
+      - NET_RAW
+    security_opt:
+      - apparmor:unconfined
+      - seccomp:unconfined
+    environment:
+      PULSE_SERVER: unix:/run/user/${AUDIO_UID}/pulse/native
+      XDG_RUNTIME_DIR: /run/user/${AUDIO_UID}
+    volumes:
+      - /var/run/dbus:/var/run/dbus
+      - /run/avahi-daemon:/run/avahi-daemon
+      - /run/user/${AUDIO_UID}:/run/user/${AUDIO_UID}
+      - ${AUDIO_ENDPOINT_ROOT}/config:/airplay-config:ro
+      - /run/audio-endpoint:/run/audio-endpoint
+      - ${AUDIO_ENDPOINT_ROOT}/airplay/notify.sh:/notify.sh:ro
+      - ${AUDIO_ENDPOINT_ROOT}/airplay/run.sh:/airplay-run.sh:ro
+    entrypoint: ["/bin/sh", "/airplay-run.sh"]
     logging:
       driver: json-file
       options:

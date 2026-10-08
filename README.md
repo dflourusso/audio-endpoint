@@ -11,14 +11,17 @@ O navegador fala só com a API local. A API não executa shell nem `bluetoothctl
 ```
 Navegador  ->  API (porta 80)  ->  agente Unix
                       |
-                      +->  Sendspin Bluetooth Bridge  ->  BlueZ / PipeWire
+                      +->  Sendspin Bluetooth Bridge  ->  BlueZ / PipeWire  ->  caixa
+                      |
+                      +->  Shairport Sync (AirPlay)   ->  PipeWire           ->  caixa
                                               |
                                               +->  Music Assistant (mDNS / Sendspin)
+                                              +->  iPhone (AirPlay)
 ```
 
 Cada caixa pareada vira um player do Music Assistant. USB, P2 e HDMI aparecem na página de áudio quando o hardware existe, mas esta versão não troca a reprodução para eles.
 
-O Spotify do celular não fala Sendspin. O plugin Spotify Connect do Music Assistant publica os players na lista de dispositivos do Spotify. O áudio continua saindo pelo Sendspin até o Orange Pi. Não instalamos um receptor Spotify na placa.
+O iPhone manda qualquer aplicativo pelo AirPlay. O áudio entra no Orange Pi e sai na caixa que continua pareada nele. Android não fala AirPlay; nesses aplicativos o celular conecta direto na caixa. Não instalamos um receptor Spotify Connect na placa.
 
 ## 2. Requisitos
 
@@ -51,7 +54,7 @@ Rode o instalador de novo sem medo: ele não apaga `.env`, `config/`, `bridge/` 
 1. Abra `http://<hostname>.local` no celular, na mesma rede.
 2. Em Bluetooth, busque a caixa, pareie e conecte. A caixa entra na frota do bridge e o Music Assistant passa a enxergá-la.
 3. No Music Assistant, confirme o player Sendspin.
-4. Para o Spotify, no Music Assistant abra Settings, Plugins, Spotify Connect, e marque esse player. O motor recomendado é o Spotify Soloist.
+4. No iPhone, abra o AirPlay e escolha o hostname da placa, por exemplo `audio-sala`. A biblioteca do Music Assistant continua no player Sendspin.
 
 A interface do bridge também escuta na porta 8080, porque a imagem usa a rede do host e não oferece bind só em localhost. Use a nossa interface. A porta 8080 fica na LAN enquanto a autenticação do bridge não for ligada.
 
@@ -92,29 +95,41 @@ O bridge anuncia os players por mDNS (`_sendspin._tcp`) e escuta a partir da por
 
 Não há um segundo cliente Sendspin para a saída de som da placa. Isso seria outro player.
 
-## 8. Music Assistant
+## 8. AirPlay
 
-O servidor do Music Assistant descobre o player sozinho. Não é preciso IP fixo no Orange Pi. A página Music Assistant mostra se o bridge está no ar, o nome do player e se o servidor está conectado.
+Cada caixa Bluetooth da frota aparece no iPhone como um AirPlay, com o nome do player e o hostname, no mesmo formato do Music Assistant. Sem caixa na frota, não há anúncio. O iPhone escolhe qual caixa toca. O áudio de qualquer aplicativo, inclusive YouTube Music, Amazon Music e Spotify, chega nessa caixa. Ela continua pareada no Orange Pi.
 
-O Spotify Connect é configurado só no Music Assistant. A caixa some do aplicativo do Spotify se o Music Assistant estiver desligado, mesmo com o Orange Pi ligado.
+Cada anúncio grava o áudio numa saída PipeWire só dele, que existe mesmo com a caixa desligada. Quando o bridge reconecta essa caixa, o áudio passa para ela. As outras caixas pareadas não recebem esse som.
 
-## 9. mDNS
+Na página Bluetooth, cada caixa tem um webhook opcional. Vazio não chama ninguém. O aviso sai só quando o AirPlay daquela caixa começa, para o fim da música não ligar a caixa outra vez. O valor fica em `config/`, fora do Git e fora do config do bridge. Cada placa guarda o webhook da caixa que precisa ligar.
+
+Se o AirPlay de uma caixa começa enquanto o Music Assistant toca nela, o webhook dessa caixa dispara e o Sendspin dela fica mudo até a pausa. Se o Music Assistant começa nessa caixa durante o AirPlay dela, só essa sessão AirPlay é cortada. As outras caixas seguem.
+
+A automação que já liga a caixa quando o Music Assistant toca ganha esse webhook como outro gatilho, e também pausa o player do Music Assistant dessa sala. Pausar não é um play novo.
+
+O Music Assistant também pode descobrir esses AirPlays. A reprodução da biblioteca continua no player Sendspin, que é o que sincroniza com o resto da casa.
+
+## 9. Music Assistant
+
+O servidor do Music Assistant descobre o player Sendspin sozinho. Não é preciso IP fixo no Orange Pi. A página Música mostra se o bridge está no ar, o nome do player, se o servidor está conectado, e se o AirPlay está anunciado.
+
+## 10. mDNS
 
 O Avahi do host anuncia o hostname. É isso que resolve `audio-sala.local` para a interface web. O anúncio do player Sendspin é outro serviço, feito pelo bridge. Os dois convivem no mesmo `avahi-daemon`. Não suba um segundo Avahi dentro de um container.
 
-## 10. Atualização
+## 11. Atualização
 
 Na placa, dentro de `/opt/audio-endpoint`:
 
 ```bash
 git pull --ff-only
-docker compose pull sendspin-bridge
+docker compose pull sendspin-bridge shairport-sync
 docker compose up -d --build
 ```
 
-O botão Atualizar faz a mesma sequência pelo agente. A imagem `audio-endpoint` é compilada na placa; só a imagem do bridge é baixada. O agente recusa uma árvore Git suja ou um pull que não seja fast-forward, copia `.env`, `config/` e `bridge/` para `data/backups/<data>/` e só então sobe os containers. Não há reboot automático. A interface pode cair por alguns segundos enquanto a imagem da API é recriada. O progresso fica em `data/update-status.json`.
+O botão Atualizar faz a mesma sequência pelo agente. A imagem `audio-endpoint` é compilada na placa; as imagens do bridge e do Shairport Sync são baixadas. O agente recusa uma árvore Git suja ou um pull que não seja fast-forward, copia `.env`, `config/` e `bridge/` para `data/backups/<data>/` e só então sobe os containers. Não há reboot automático. A interface pode cair por alguns segundos enquanto a imagem da API é recriada. O progresso fica em `data/update-status.json`.
 
-A tag do bridge está no `.env` (`BRIDGE_IMAGE`). Atualizar o bridge é mudar essa tag no Git e publicar. `latest` não é usado, para uma placa não mudar de versão sozinha.
+A tag do bridge está no `.env` (`BRIDGE_IMAGE`). A do AirPlay está em `SHAIRPORT_IMAGE`. Atualizar uma delas é mudar essa tag no Git e publicar. `latest` não é usado, para uma placa não mudar de versão sozinha.
 
 Se a atualização subir e a interface não voltar:
 
@@ -124,7 +139,7 @@ git checkout <commit-anterior>
 docker compose up -d --build
 ```
 
-## 11. Backup
+## 12. Backup
 
 Guarde, fora do cartão:
 
@@ -135,11 +150,11 @@ Guarde, fora do cartão:
 
 O último diretório tem as chaves de pareamento do BlueZ. Sem ele, a caixa pede pareamento de novo mesmo com o `config.json` restaurado.
 
-## 12. Troubleshooting
+## 13. Troubleshooting
 
 Os casos de mDNS, Bluetooth, Sendspin, Music Assistant, áudio, Docker e o ponto de acesso `audio-setup` estão em [docs/troubleshooting.md](docs/troubleshooting.md).
 
-## 13. Várias unidades
+## 14. Várias unidades
 
 O mesmo repositório vai em cada placa. A diferença é o estado local, criado na primeira instalação e editado pela interface:
 

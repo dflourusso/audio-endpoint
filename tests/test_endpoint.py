@@ -166,21 +166,27 @@ class FakeAgent:
         return {"ok": True, "message": "ok", "hostname": fields.get("hostname")}
 
 
-def build_client(agent=None):
+def build_client(agent=None, webhook_url=""):
+    import tempfile
+    root = Path(tempfile.mkdtemp())
     settings = Settings(
         bridge_url="http://bridge.invalid",
         bridge_token="",
         api_token="",
         agent_socket="/tmp/audio-endpoint-test.sock",
-        config_dir=__import__("pathlib").Path("/tmp"),
-        data_dir=__import__("pathlib").Path("/tmp"),
-        host_proc=__import__("pathlib").Path("/proc"),
-        host_sys=__import__("pathlib").Path("/sys"),
-        hostname_file=__import__("pathlib").Path("/etc/hostname"),
-        os_release_file=__import__("pathlib").Path("/etc/os-release"),
-        web_dist=__import__("pathlib").Path("/tmp/missing-web"),
+        config_dir=root / "config",
+        data_dir=Path("/tmp"),
+        host_proc=Path("/proc"),
+        host_sys=Path("/sys"),
+        hostname_file=Path("/etc/hostname"),
+        os_release_file=Path("/etc/os-release"),
+        web_dist=Path("/tmp/missing-web"),
         project_version="0.1.0",
         web_port=80,
+        airplay_webhook_url=webhook_url,
+        airplay_flag=root / "airplay-playing",
+        airplay_run=root / "airplay",
+        supervise_airplay=False,
     )
     bridge = FakeBridge()
     agent = agent or FakeAgent()
@@ -511,7 +517,7 @@ def test_update_pulls_the_bridge_and_builds_the_local_image(tmp_path):
 
     HostControl(tmp_path, runner)._update()
     docker_calls = [args for args in calls if args and args[0] == "docker"]
-    assert docker_calls[0][-2:] == ["pull", "sendspin-bridge"]
+    assert docker_calls[0][-3:] == ["pull", "sendspin-bridge", "shairport-sync"]
     assert docker_calls[1][-3:] == ["up", "-d", "--build"]
     status = json.loads((tmp_path / "data" / "update-status.json").read_text())
     assert status["state"] == "succeeded"

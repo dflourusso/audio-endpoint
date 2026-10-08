@@ -18,6 +18,10 @@ class Settings:
     web_dist: Path
     project_version: str
     web_port: int
+    airplay_webhook_url: str = ""
+    airplay_flag: Path = Path("/run/audio-endpoint/airplay-playing")
+    airplay_run: Path = Path("/run/audio-endpoint/airplay")
+    supervise_airplay: bool = True
 
 
 def load_settings() -> Settings:
@@ -42,4 +46,6 @@ def load_settings() -> Settings:
         web_dist=Path(os.environ.get("WEB_DIST", "/app/web/dist")),
         project_version=version,
         web_port=int(os.environ.get("WEB_PORT", "80")),
+        airplay_webhook_url=os.environ.get("AIRPLAY_WEBHOOK_URL", ""),
+        airplay_flag=Path(os.environ.get("AIRPLAY_FLAG", "/run/audio-endpoint/airplay-playing")),
     )
