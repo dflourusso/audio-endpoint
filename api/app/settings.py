@@ -24,14 +24,23 @@ class Settings:
     supervise_airplay: bool = True
 
 
+def read_project_version() -> str:
+    candidates = (
+        Path("/app/VERSION"),
+        Path(__file__).resolve().parents[2] / "VERSION",
+    )
+    for path in candidates:
+        try:
+            version = path.read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if version:
+            return version
+    return os.environ.get("PROJECT_VERSION", "").strip() or "0.2.0"
+
+
 def load_settings() -> Settings:
-    version = os.environ.get("PROJECT_VERSION", "").strip()
-    if not version:
-        version_file = Path("/app/VERSION")
-        if version_file.is_file():
-            version = version_file.read_text(encoding="utf-8").strip()
-        else:
-            version = "0.1.0"
+    version = read_project_version()
     return Settings(
         bridge_url=os.environ.get("BRIDGE_URL", "http://127.0.0.1:8080").rstrip("/"),
         bridge_token=os.environ.get("BRIDGE_TOKEN", "").strip(),

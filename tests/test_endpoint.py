@@ -15,6 +15,7 @@ from app.bluetooth_service import (
 )
 from app.routers.status import describe_playback
 from app.bridge import BridgeClient
+from app.settings import read_project_version
 
 from app.audio import list_outputs, select_output, OutputNotSupported
 from app.fleet import remove_device, upsert_device
@@ -76,6 +77,10 @@ def test_cpu_and_memory_parsers():
     assert percent == 50.0
     mem = memory("MemTotal: 1024 kB\nMemAvailable: 512 kB\n")
     assert mem["percent"] == 50.0
+
+
+def test_project_version_comes_from_the_version_file():
+    assert read_project_version() == "0.2.0"
 
 
 def test_hosts_file_gains_mdns_name():

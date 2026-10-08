@@ -35,7 +35,7 @@ services:
     build:
       context: .
       dockerfile: api/Dockerfile
-    image: audio-endpoint:${PROJECT_VERSION:-0.1.0}
+    image: audio-endpoint:${PROJECT_VERSION:-0.2.0}
     pull_policy: build
     container_name: audio-endpoint
     restart: unless-stopped
@@ -61,7 +61,7 @@ services:
       HOST_SYS: /host/sys
       HOST_HOSTNAME_FILE: /host/etc/hostname
       HOST_OS_RELEASE: /host/etc/os-release
-      PROJECT_VERSION: ${PROJECT_VERSION:-0.1.0}
+      PROJECT_VERSION: ${PROJECT_VERSION:-0.2.0}
       WEB_PORT: ${WEB_PORT:-80}
       AIRPLAY_WEBHOOK_URL: ${AIRPLAY_WEBHOOK_URL:-}
       TZ: ${TZ:-America/Sao_Paulo}
