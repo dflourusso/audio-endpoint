@@ -111,6 +111,9 @@ class SpeakerStore:
     def playing(self, mac: str) -> bool:
         return bool(self._playing.get((mac or "").strip().upper()))
 
+    def active_macs(self) -> set[str]:
+        return {mac for mac, active in self._playing.items() if active}
+
     def any_playing(self) -> bool:
         return any(self._playing.get(row["mac"]) for row in self._rows)
 

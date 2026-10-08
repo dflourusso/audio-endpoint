@@ -5,7 +5,14 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
-from app.bluetooth_service import BluetoothService, auto_released_player, choose_adapter, merge_devices, sinkless_speaker
+from app.bluetooth_service import (
+    BluetoothService,
+    auto_released_player,
+    bluetooth_recovery,
+    choose_adapter,
+    merge_devices,
+    sinkless_speaker,
+)
 from app.routers.status import describe_playback
 from app.bridge import BridgeClient
 
@@ -280,6 +287,49 @@ def test_auto_released_speaker_is_reclaimed_once():
     service.status()
     assert reclaimed == [("JBL Bar 2.1 @ audio-suite", True)]
     assert auto_released_player({"bt_released_by": "user", "player_name": "JBL"}, {}) == ""
+
+
+def test_auto_released_player_uses_the_live_name_when_the_flag_is_only_in_config():
+    mac = "88:D0:39:0D:4B:FC"
+    status = {
+        "player_name": "JBL Bar 2.1 @ audio-suite",
+        "bluetooth_mac": mac,
+        "bluetooth_connected": False,
+    }
+    config = {
+        "BLUETOOTH_DEVICES": [
+            {"mac": mac, "player_name": "JBL Bar 2.1", "released": True, "released_by": "auto"}
+        ]
+    }
+    assert auto_released_player(status, config) == "JBL Bar 2.1 @ audio-suite"
+    assert bluetooth_recovery(status, config, set()) == [
+        {"mac": mac, "player_name": "JBL Bar 2.1 @ audio-suite", "reclaim": True, "urgent": False}
+    ]
+    connected = dict(status)
+    connected["bluetooth_connected"] = True
+    assert bluetooth_recovery(connected, config, set()) == []
+
+
+def test_play_without_a_bluetooth_link_asks_for_reconnect():
+    mac = "88:D0:39:0D:4B:FC"
+    status = {
+        "player_name": "JBL Bar 2.1 @ audio-suite",
+        "bluetooth_mac": mac,
+        "bluetooth_connected": False,
+        "playing": False,
+    }
+    config = {"BLUETOOTH_DEVICES": [{"mac": mac, "player_name": "JBL Bar 2.1", "released": False}]}
+    assert bluetooth_recovery(status, config, {mac}) == [
+        {"mac": mac, "player_name": "JBL Bar 2.1 @ audio-suite", "reclaim": False, "urgent": True}
+    ]
+    status["playing"] = True
+    assert bluetooth_recovery(status, config, set())[0]["urgent"] is True
+    idle = bluetooth_recovery(
+        {"player_name": "JBL Bar 2.1 @ audio-suite", "bluetooth_mac": mac, "bluetooth_connected": False, "playing": False},
+        config,
+        set(),
+    )
+    assert idle == []
 
 
 def test_console_pipewire_is_masked_so_the_speaker_stays_with_the_endpoint(tmp_path):

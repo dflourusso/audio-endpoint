@@ -38,14 +38,59 @@ def live_rows(status: dict | None) -> list[dict]:
     return []
 
 
+def _player_name_for(mac: str, device: dict, status: dict | None) -> str:
+    for row in live_rows(status):
+        if _live_mac(row) == mac:
+            name = str(row.get("player_name") or "").strip()
+            if name:
+                return name
+    return str(device.get("player_name") or "").strip()
+
+
+def bluetooth_recovery(status: dict | None, config: dict | None, airplay_playing: set[str] | None = None) -> list[dict]:
+    """Caixas sem vínculo que precisam ser chamadas de novo.
+
+    `reclaim` liga de novo o gerenciamento que o bridge desligou sozinho.
+    `urgent` é play do AirPlay ou do Music Assistant com o Bluetooth caído.
+    """
+    playing = {str(mac or "").strip().upper() for mac in (airplay_playing or set())}
+    rows = {_live_mac(row): row for row in live_rows(status)}
+    actions = []
+    seen = set()
+    for device in (config or {}).get("BLUETOOTH_DEVICES") or []:
+        if not isinstance(device, dict):
+            continue
+        mac = str(device.get("mac") or "").strip().upper()
+        if not mac or mac in seen:
+            continue
+        live = rows.get(mac, {})
+        if _bluetooth_connected(live):
+            continue
+        status_released = str((status or {}).get("bt_released_by") or "") == "auto" and _live_mac(status or {}) == mac
+        reclaim = bool(device.get("released") and device.get("released_by") == "auto") or status_released
+        urgent = mac in playing or bool(live.get("playing"))
+        if not reclaim and not urgent:
+            continue
+        seen.add(mac)
+        actions.append(
+            {
+                "mac": mac,
+                "player_name": _player_name_for(mac, device, status),
+                "reclaim": reclaim,
+                "urgent": urgent,
+            }
+        )
+    return actions
+
+
 def auto_released_player(status: dict | None, config: dict | None) -> str:
     if str((status or {}).get("bt_released_by") or "") == "auto":
-        name = str((status or {}).get("player_name") or "")
+        name = str((status or {}).get("player_name") or "").strip()
         if name:
             return name
-    for device in (config or {}).get("BLUETOOTH_DEVICES") or []:
-        if isinstance(device, dict) and device.get("released") and device.get("released_by") == "auto":
-            return str(device.get("player_name") or (status or {}).get("player_name") or "")
+    for action in bluetooth_recovery(status, config, set()):
+        if action["reclaim"] and action["player_name"]:
+            return action["player_name"]
     return ""
 
 
@@ -244,11 +289,11 @@ class BluetoothService:
         now = time.monotonic()
         if now - self._reclaimed_at < 60:
             return
-        self._reclaimed_at = now
         try:
             self.bridge.set_bt_management(player_name, True)
         except Exception:
             return
+        self._reclaimed_at = now
 
     def _fix_audio_once(self, mac: str) -> None:
         if not mac or self._audio_fix is None:

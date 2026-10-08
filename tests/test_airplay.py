@@ -1,10 +1,11 @@
 import json
+import threading
 from pathlib import Path
 
 import httpx
 
 from airplay_link import decide, parse_inputs, parse_modules, parse_sinks
-from app.airplay import AirPlaySwitch
+from app.airplay import AirPlaySwitch, RecoveryClock, supervise
 from app.airplay_speakers import SpeakerStore, clean_webhook
 from audio_endpoint_agent import HostControl, dispatch
 from test_endpoint import build_client
@@ -247,3 +248,51 @@ def test_invalid_webhook_is_ignored(tmp_path):
     store = _store(tmp_path)
     switch = AirPlaySwitch(store, poster=lambda url: (_ for _ in ()).throw(AssertionError(url)))
     assert switch.set_active(SALA, True) is True
+
+
+def test_recovery_retries_after_the_interval_and_play_does_not_wait():
+    clock = RecoveryClock(30)
+    assert clock.ready(SUITE, False, 0) is True
+    assert clock.ready(SUITE, False, 10) is False
+    assert clock.ready(SUITE, False, 30) is True
+    assert clock.ready(SALA, True, 31) is True
+    assert clock.ready(SALA, True, 32) is False
+
+
+def test_supervise_reclaims_and_reconnects_a_released_speaker(tmp_path):
+    mac = "88:D0:39:0D:4B:FC"
+    calls = []
+    stop = threading.Event()
+
+    class Bridge:
+        def status(self):
+            return {
+                "player_name": "JBL Bar 2.1 @ audio-suite",
+                "bluetooth_mac": mac,
+                "bluetooth_connected": False,
+                "playing": False,
+            }
+
+        def config(self):
+            return {
+                "BLUETOOTH_DEVICES": [
+                    {"mac": mac, "player_name": "JBL Bar 2.1", "released": True, "released_by": "auto"}
+                ]
+            }
+
+    def recover(action):
+        calls.append(action)
+        stop.set()
+
+    supervise(
+        Bridge(),
+        AirPlaySwitch(_store(tmp_path)),
+        lambda _mac: None,
+        stop,
+        recover=recover,
+        interval=0.01,
+        recover_interval=30,
+    )
+    assert calls == [
+        {"mac": mac, "player_name": "JBL Bar 2.1 @ audio-suite", "reclaim": True, "urgent": False}
+    ]

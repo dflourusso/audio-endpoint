@@ -43,7 +43,12 @@ def create_app(settings=None, bridge=None, agent=None, supervise_airplay=None) -
                     except AgentError:
                         return
 
-                supervise(app.state.bridge, app.state.airplay, take_over, stop, released)
+                def recover(action: dict) -> None:
+                    if action.get("reclaim"):
+                        app.state.bridge.set_bt_management(action["player_name"], True)
+                    app.state.bridge.reconnect(action["mac"], action["player_name"])
+
+                supervise(app.state.bridge, app.state.airplay, take_over, stop, released, recover)
 
             thread = threading.Thread(target=run_switch, args=(stop,), daemon=True, name="airplay-switch")
             thread.start()

@@ -1,10 +1,12 @@
 """Estado da sessão AirPlay de cada caixa e a troca com o Sendspin dela."""
 
 import threading
+import time
 
 import httpx
 
 from app.airplay_speakers import MAC_RE, SpeakerStore
+from app.bluetooth_service import bluetooth_recovery
 from app.routers.status import describe_playback
 
 
@@ -75,14 +77,45 @@ def _post_webhook(url: str) -> None:
         return
 
 
-def supervise(bridge, switch: AirPlaySwitch, take_over, stop: threading.Event, released=None, interval: float = 1.0) -> None:
+class RecoveryClock:
+    """A primeira chamada sai na hora. As seguintes esperam o intervalo, também se a anterior falhou."""
+
+    def __init__(self, interval: float = 30.0):
+        self.interval = interval
+        self._next: dict[str, float] = {}
+        self._nudged: set[str] = set()
+
+    def ready(self, mac: str, urgent: bool, now: float) -> bool:
+        if not urgent:
+            self._nudged.discard(mac)
+        elif mac not in self._nudged:
+            self._nudged.add(mac)
+            self._next[mac] = now + self.interval
+            return True
+        if now >= self._next.get(mac, 0.0):
+            self._next[mac] = now + self.interval
+            return True
+        return False
+
+
+def supervise(
+    bridge,
+    switch: AirPlaySwitch,
+    take_over,
+    stop: threading.Event,
+    released=None,
+    recover=None,
+    interval: float = 1.0,
+    recover_interval: float = 30.0,
+) -> None:
+    clock = RecoveryClock(recover_interval)
     while not stop.is_set():
         try:
-            macs = playing_macs(bridge.status())
+            status = bridge.status()
         except Exception:
-            macs = None
-        if macs is not None:
-            for mac in switch.observe(macs):
+            status = None
+        if status is not None:
+            for mac in switch.observe(playing_macs(status)):
                 try:
                     take_over(mac)
                 except Exception:
@@ -93,7 +126,21 @@ def supervise(bridge, switch: AirPlaySwitch, take_over, stop: threading.Event, r
                         released()
                     except Exception:
                         pass
+            if recover is not None:
+                try:
+                    config = bridge.config()
+                except Exception:
+                    config = None
+                if config is not None:
+                    now = time.monotonic()
+                    for action in bluetooth_recovery(status, config, switch.store.active_macs()):
+                        if not clock.ready(action["mac"], action["urgent"], now):
+                            continue
+                        try:
+                            recover(action)
+                        except Exception:
+                            continue
         stop.wait(interval)
 
 
-__all__ = ["AirPlaySwitch", "is_loopback", "playing_macs", "supervise"]
+__all__ = ["AirPlaySwitch", "RecoveryClock", "is_loopback", "playing_macs", "supervise"]
