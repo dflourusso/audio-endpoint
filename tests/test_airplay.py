@@ -39,6 +39,7 @@ def test_each_speaker_gets_its_own_airplay(tmp_path):
     assert 'name = "Sala @ audio-sala"' in sala
     assert 'output_backend = "pa"' in sala
     assert 'service_type = "classic"' in sala
+    assert "volume_range_db = 30" in sala
     assert "port = 7000" in sala
     assert "airplay_device_id_offset = 0" in sala
     assert 'sink = "bluez_output.AA_BB_CC_DD_EE_01.1"' in sala

@@ -71,6 +71,7 @@ general =
   interpolation = "basic";
   service_type = "classic";
   mdns_backend = "avahi";
+  volume_range_db = 30;
 }};
 
 sessioncontrol =
