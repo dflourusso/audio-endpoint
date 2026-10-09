@@ -136,6 +136,7 @@ class HostControl:
             target.write_text(desired, encoding="utf-8")
         self._as_audio_user(["systemctl", "--user", "daemon-reload"])
         self._as_audio_user(["systemctl", "--user", "enable", "--now", "audio-endpoint-airplay-link.service"])
+        self._as_audio_user(["systemctl", "--user", "restart", "audio-endpoint-airplay-link.service"])
 
     def _audio_home(self) -> str:
         completed = self.run(["getent", "passwd", "audioendpoint"])

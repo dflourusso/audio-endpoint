@@ -13,6 +13,7 @@ nqptp_pid=$!
 
 conf_dir=/airplay-config/shairport
 pid_dir=/run/audio-endpoint/airplay/pids
+ready_dir=/run/audio-endpoint/airplay/ready
 mkdir -p "$pid_dir"
 
 while true; do
@@ -34,8 +35,12 @@ while true; do
       if [ -f "$pidfile" ]; then
         pid=$(cat "$pidfile")
       fi
+      ready="$ready_dir/$base"
+      if [ ! -f "$ready" ]; then
+        continue
+      fi
       if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        if [ "$conf" -nt "$pidfile" ]; then
+        if [ "$conf" -nt "$pidfile" ] || [ "$ready" -nt "$pidfile" ]; then
           kill -TERM "$pid" 2>/dev/null || true
           pid=""
         fi

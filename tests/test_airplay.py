@@ -4,7 +4,7 @@ from pathlib import Path
 
 import httpx
 
-from airplay_link import decide, parse_inputs, parse_modules, parse_sinks
+from airplay_link import decide, loopback_arguments, mark_ready, parse_inputs, parse_modules, parse_sinks
 from app.airplay import AirPlaySwitch, RecoveryClock, supervise
 from app.airplay_speakers import SpeakerStore, clean_webhook
 from audio_endpoint_agent import HostControl, dispatch
@@ -99,8 +99,23 @@ def test_airplay_mutes_only_the_speaker_that_is_playing():
     assert decision["mute"] == [10]
     assert decision["unmute"] == []
     assert decision["load_null"] == []
-    assert decision["load_loopback"] == []
-    assert decision["unload"] == []
+    assert decision["unload"] == [9, 10]
+    assert decision["load_loopback"] == [
+        {
+            "source": "airplay_AA_BB_CC_DD_EE_01.monitor",
+            "sink": "bluez_output.AA_BB_CC_DD_EE_01.1",
+            "token": "AA_BB_CC_DD_EE_01",
+        },
+        {
+            "source": "airplay_AA_BB_CC_DD_EE_02.monitor",
+            "sink": "bluez_output.AA_BB_CC_DD_EE_02.1",
+            "token": "AA_BB_CC_DD_EE_02",
+        },
+    ]
+    arguments = loopback_arguments(decision["load_loopback"][0])
+    assert "node.passive=false" in arguments[-1]
+    assert "application.name=AirPlayLink" in arguments[-1]
+    assert "media.name=AA_BB_CC_DD_EE_01" in arguments[-1]
 
 
 def test_missing_speaker_keeps_its_sink_and_drops_the_loopback():
@@ -114,6 +129,75 @@ def test_missing_speaker_keeps_its_sink_and_drops_the_loopback():
     assert decision["mute"] == []
     gone = decide(sinks, [], modules, [])
     assert gone["unload"] == [4]
+
+
+def test_pipewire_link_is_not_muted_and_is_not_duplicated():
+    speakers = [{"token": "AA_BB_CC_DD_EE_01", "playing": True}]
+    sinks = parse_sinks(json.dumps([
+        {"index": 1, "name": "airplay_AA_BB_CC_DD_EE_01", "state": "RUNNING"},
+        {"index": 3, "name": "bluez_output.AA_BB_CC_DD_EE_01.1", "state": "SUSPENDED"},
+    ]))
+    inputs = parse_inputs(json.dumps([
+        {
+            "index": 10,
+            "sink": "bluez_output.AA_BB_CC_DD_EE_01.1",
+            "mute": False,
+            "properties": {"application.name": "Sendspin"},
+        },
+        {
+            "index": 12,
+            "sink": "bluez_output.AA_BB_CC_DD_EE_01.1",
+            "mute": True,
+            "owner_module": 4294967295,
+            "properties": {"application.name": "PipeWire", "media.name": "AA_BB_CC_DD_EE_01"},
+        },
+    ]))
+    modules = parse_modules(json.dumps([
+        {"name": "module-null-sink", "index": 20, "argument": "sink_name=airplay_AA_BB_CC_DD_EE_01"},
+        {"name": "module-loopback", "index": 9, "argument": ""},
+    ]))
+    decision = decide(sinks, inputs, modules, speakers)
+    assert 12 not in decision["mute"]
+    assert decision["unmute"] == [12]
+    assert decision["mute"] == [10]
+    assert decision["load_loopback"] == []
+    assert decision["unload"] == []
+
+
+def test_marked_loopback_is_kept():
+    argument = (
+        "source=airplay_AA_BB_CC_DD_EE_01.monitor "
+        "sink=bluez_output.AA_BB_CC_DD_EE_01.1 "
+        "sink_input_properties=application.name=AirPlayLink "
+        "media.name=AA_BB_CC_DD_EE_01 node.passive=false"
+    )
+    sinks = parse_sinks(json.dumps([
+        {"index": 1, "name": "airplay_AA_BB_CC_DD_EE_01", "state": "RUNNING"},
+        {"index": 3, "name": "bluez_output.AA_BB_CC_DD_EE_01.1", "state": "RUNNING"},
+    ]))
+    modules = parse_modules(json.dumps([
+        {"name": "module-loopback", "index": 9, "argument": argument},
+    ]))
+    decision = decide(sinks, [], modules, [{"token": "AA_BB_CC_DD_EE_01", "playing": True}])
+    assert decision["load_loopback"] == []
+    assert decision["unload"] == []
+
+
+def test_ready_stamp_follows_the_sink(tmp_path):
+    ready = tmp_path / "ready"
+    speakers = [{"token": "AA_BB_CC_DD_EE_01", "playing": False}]
+    sinks = parse_sinks('[{"index": 1, "name": "airplay_AA_BB_CC_DD_EE_01", "state": "IDLE"}]')
+    mark_ready(speakers, sinks, ready)
+    stamp = ready / "AA_BB_CC_DD_EE_01"
+    assert stamp.is_file()
+    first = stamp.stat().st_mtime_ns
+    mark_ready(speakers, sinks, ready)
+    assert stamp.stat().st_mtime_ns == first
+    mark_ready(speakers, [], ready)
+    assert not stamp.exists()
+    mark_ready(speakers, sinks, ready)
+    mark_ready([], sinks, ready)
+    assert not stamp.exists()
 
 
 def test_webhook_fires_only_for_the_speaker_that_started(tmp_path):
