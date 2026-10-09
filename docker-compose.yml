@@ -68,12 +68,3 @@ services:
       options:
         max-size: "10m"
         max-file: "3"
-
-  # O agente anterior a 1.0.0 ainda executa `docker compose pull shairport-sync`
-  # depois de baixar este arquivo. O nome precisa existir. O processo só
-  # encerra, para o receptor não voltar a anunciar.
-  shairport-sync:
-    image: mikebrady/shairport-sync:4.3.7-classic
-    container_name: shairport-sync
-    entrypoint: ["/bin/true"]
-    restart: "no"

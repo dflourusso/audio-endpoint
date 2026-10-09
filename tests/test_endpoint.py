@@ -80,7 +80,7 @@ def test_cpu_and_memory_parsers():
 
 
 def test_project_version_comes_from_the_version_file():
-    assert read_project_version() == "1.0.0"
+    assert read_project_version() == "1.0.1"
 
 
 def test_hosts_file_gains_mdns_name():
@@ -550,30 +550,6 @@ def test_update_does_not_pull_a_dirty_tree(tmp_path):
     status = json.loads((tmp_path / "data" / "update-status.json").read_text())
     assert status["state"] == "failed"
     assert not any(args[0] == "docker" for args in calls)
-
-
-def test_compose_keeps_the_name_the_old_updater_still_pulls():
-    text = (Path(__file__).resolve().parents[1] / "docker-compose.yml").read_text(encoding="utf-8")
-    assert "\n  shairport-sync:\n" in text
-    assert 'entrypoint: ["/bin/true"]' in text
-
-
-def test_retire_airplay_removes_the_old_container(tmp_path):
-    calls = []
-
-    def runner(args):
-        calls.append(args)
-
-        class Result:
-            returncode = 0
-            stdout = ""
-            stderr = ""
-
-        return Result()
-
-    HostControl(tmp_path, runner).retire_airplay()
-    assert ["docker", "rm", "-f", "shairport-sync"] in calls
-    assert not any("wireplumber" in " ".join(args) for args in calls)
 
 
 def test_update_pulls_the_bridge_and_builds_the_local_image(tmp_path):
