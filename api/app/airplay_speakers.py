@@ -67,9 +67,9 @@ general =
   name = "{safe_name}";
   port = {port};
   airplay_device_id_offset = {offset};
-  output_backend = "pulseaudio";
+  output_backend = "pa";
   interpolation = "basic";
-  service_type = "airplay2";
+  service_type = "classic";
   mdns_backend = "avahi";
 }};
 
@@ -80,7 +80,7 @@ sessioncontrol =
   wait_for_completion = "no";
 }};
 
-pulseaudio =
+pa =
 {{
   sink = "bluez_output.{token}.1";
   application_name = "AirPlay {token}";

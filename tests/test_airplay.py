@@ -37,7 +37,9 @@ def test_each_speaker_gets_its_own_airplay(tmp_path):
     sala = files[0].read_text(encoding="utf-8")
     suite = files[1].read_text(encoding="utf-8")
     assert 'name = "Sala @ audio-sala"' in sala
-    assert 'port = 7000' in sala
+    assert 'output_backend = "pa"' in sala
+    assert 'service_type = "classic"' in sala
+    assert "port = 7000" in sala
     assert "airplay_device_id_offset = 0" in sala
     assert 'sink = "bluez_output.AA_BB_CC_DD_EE_01.1"' in sala
     assert 'application_name = "AirPlay AA_BB_CC_DD_EE_01"' in sala
