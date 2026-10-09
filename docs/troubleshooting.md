@@ -75,11 +75,11 @@ avahi-browse -rt _airplay._tcp
 
 O nome no iPhone é o do player mais o hostname, por exemplo `Sala @ audio-sala`. Cada caixa da frota é um anúncio. Sem caixa na frota, a busca não lista este aparelho.
 
-Cada saída `airplay_` seguida do MAC precisa existir no PipeWire do usuário `audioendpoint`. Sem ela o iPhone não ouve nada quando a caixa está desligada, e também não ouve quando ela volta.
+O Shairport escreve no sink Bluetooth da caixa, `bluez_output.` seguido do MAC e `.1`. Com a caixa desligada esse nó não existe, e o anúncio continua. Quando a caixa aparece, o processo dela reinicia uma vez para abrir esse sink.
 
 ```bash
-sudo -u audioendpoint XDG_RUNTIME_DIR=/run/user/$(id -u audioendpoint) pactl list short sinks | grep airplay_
-sudo -u audioendpoint XDG_RUNTIME_DIR=/run/user/$(id -u audioendpoint) systemctl --user status audio-endpoint-airplay-link.service
+sudo -u audioendpoint env XDG_RUNTIME_DIR=/run/user/$(id -u audioendpoint) wpctl status
+sudo -u audioendpoint env XDG_RUNTIME_DIR=/run/user/$(id -u audioendpoint) systemctl --user status audio-endpoint-airplay-link.service
 ```
 
 O segundo comando pode falhar se o linger não estiver ativo. `loginctl enable-linger audioendpoint` e reinicie o serviço do usuário.

@@ -1,4 +1,8 @@
-"""Cria a saída de cada AirPlay e liga só à caixa Bluetooth daquele MAC."""
+"""Cala o Sendspin da caixa enquanto o AirPlay dela está ativo.
+
+O Shairport abre o sink Bluetooth pelo nome. Este processo só emudece
+os outros fluxos dessa caixa, com wpctl, e os devolve quando a sessão acaba.
+"""
 
 import json
 import sys
@@ -8,98 +12,49 @@ from pathlib import Path
 DEVICES_PATH = Path("/run/audio-endpoint/airplay/devices.json")
 READY_DIR = Path("/run/audio-endpoint/airplay/ready")
 
-
-def _load_json(text: str):
-    start = next((index for index, char in enumerate(text) if char in "[{"), None)
-    if start is None:
-        raise ValueError("sem json")
-    return json.loads(text[start:])
+STREAM = "Stream/Output/Audio"
 
 
-def parse_sinks(text: str) -> list[dict]:
-    payload = _load_json(text)
-    rows = payload if isinstance(payload, list) else payload.get("sinks", [])
-    sinks = []
-    for row in rows:
-        if not isinstance(row, dict):
+def bluez_sink_name(token: str) -> str:
+    return f"bluez_output.{token}.1"
+
+
+def airplay_application(token: str) -> str:
+    return f"AirPlay {token}"
+
+
+def parse_dump(text: str) -> tuple[list[dict], list[dict]]:
+    payload = json.loads(text)
+    if not isinstance(payload, list):
+        raise ValueError("pw-dump sem lista")
+    nodes = []
+    links = []
+    for item in payload:
+        if not isinstance(item, dict):
             continue
-        properties = row.get("properties") if isinstance(row.get("properties"), dict) else {}
-        name = str(row.get("name") or properties.get("node.name") or "")
-        if not name:
-            continue
-        sinks.append(
-            {
-                "index": row.get("index"),
-                "name": name,
-                "state": str(row.get("state") or "").upper(),
-            }
-        )
-    return sinks
-
-
-def parse_inputs(text: str) -> list[dict]:
-    payload = _load_json(text)
-    rows = payload if isinstance(payload, list) else payload.get("sinkInputs", payload.get("sink-inputs", []))
-    inputs = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        properties = row.get("properties") if isinstance(row.get("properties"), dict) else {}
-        owner = row.get("ownerModule", row.get("owner_module", row.get("module")))
-        inputs.append(
-            {
-                "index": row.get("index"),
-                "sink": row.get("sink"),
-                "mute": bool(row.get("mute")),
-                "state": str(row.get("state") or "").upper(),
-                "owner_module": owner,
-                "application": str(properties.get("application.name") or ""),
-                "media": str(properties.get("media.name") or ""),
-            }
-        )
-    return inputs
-
-
-def parse_modules(text: str) -> list[dict]:
-    payload = _load_json(text)
-    rows = payload if isinstance(payload, list) else payload.get("modules", [])
-    modules = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        properties = row.get("properties") if isinstance(row.get("properties"), dict) else {}
-        modules.append(
-            {
-                "index": row.get("index"),
-                "name": str(row.get("name") or ""),
-                "argument": str(row.get("argument") or properties.get("argument") or ""),
-            }
-        )
-    return modules
-
-
-def _argument_value(argument: str, key: str) -> str:
-    prefix = f"{key}="
-    for part in argument.split():
-        if part.startswith(prefix):
-            return part.split("=", 1)[1]
-    return ""
-
-
-def parse_loopbacks(modules: list[dict]) -> list[dict]:
-    found = []
-    for row in modules:
-        if row["name"] != "module-loopback" or "source=airplay_" not in row["argument"]:
-            continue
-        found.append(
-            {
-                "index": row["index"],
-                "source": _argument_value(row["argument"], "source"),
-                "sink_name": _argument_value(row["argument"], "sink"),
-                "argument": row["argument"],
-            }
-        )
-    return found
+        kind = item.get("type")
+        info = item.get("info") if isinstance(item.get("info"), dict) else {}
+        if kind == "PipeWire:Interface:Node":
+            props = info.get("props") if isinstance(info.get("props"), dict) else {}
+            target = props.get("target.object") or props.get("node.target") or props.get("pulse.device") or ""
+            nodes.append(
+                {
+                    "id": item.get("id"),
+                    "name": str(props.get("node.name") or ""),
+                    "media": str(props.get("media.class") or ""),
+                    "application": str(props.get("application.name") or ""),
+                    "target": str(target),
+                    "state": str(info.get("state") or "").lower(),
+                }
+            )
+        elif kind == "PipeWire:Interface:Link":
+            links.append(
+                {
+                    "output": info.get("output-node-id"),
+                    "input": info.get("input-node-id"),
+                }
+            )
+    return nodes, links
 
 
 def read_speakers(path: Path = DEVICES_PATH) -> list[dict]:
@@ -120,105 +75,69 @@ def read_speakers(path: Path = DEVICES_PATH) -> list[dict]:
     return speakers
 
 
-def _bluez_for(sinks: list[dict], token: str) -> dict | None:
-    needle = token.upper()
-    matches = [sink for sink in sinks if "bluez" in sink["name"].lower() and needle in sink["name"].upper()]
-    return matches[0] if matches else None
+def _sink_id(nodes: list[dict], sink_name: str):
+    for node in nodes:
+        if node.get("name") == sink_name:
+            return node.get("id")
+    return None
 
 
-def airplay_application(token: str) -> str:
-    return f"AirPlay {token}"
-
-
-def _on_speaker(item: dict, bluez: dict) -> bool:
-    sink = item.get("sink")
-    if isinstance(sink, dict):
-        if sink.get("index") is not None and str(sink.get("index")) == str(bluez.get("index")):
-            return True
-        name = str(sink.get("name") or "")
-        return bool(name) and name == bluez.get("name")
-    if sink is None:
+def _linked_to(node_id, sink_id, links: list[dict]) -> bool:
+    if node_id is None or sink_id is None:
         return False
-    if bluez.get("index") is not None and str(sink) == str(bluez.get("index")):
+    return any(link.get("output") == node_id and link.get("input") == sink_id for link in links)
+
+
+def _on_sink(node: dict, sink_name: str, sink_id, links: list[dict]) -> bool:
+    if node.get("media") != STREAM:
+        return False
+    target = str(node.get("target") or "")
+    if target == sink_name or (sink_id is not None and target == str(sink_id)):
         return True
-    return str(sink) == bluez.get("name")
+    if _linked_to(node.get("id"), sink_id, links):
+        return True
+    blob = f"{node.get('name') or ''} {node.get('application') or ''}"
+    return sink_name in blob
 
 
-def _is_airplay(item: dict, token: str) -> bool:
-    return item.get("application") == airplay_application(token)
+def _streams(nodes: list[dict], links: list[dict], token: str) -> list[dict]:
+    sink_name = bluez_sink_name(token)
+    sink_id = _sink_id(nodes, sink_name)
+    return [node for node in nodes if _on_sink(node, sink_name, sink_id, links)]
 
 
-def _airplay_stream(inputs: list[dict], token: str) -> dict | None:
-    return next((item for item in inputs if _is_airplay(item, token)), None)
-
-
-def _unique(items: list) -> list:
-    seen = []
-    for item in items:
-        if item not in seen:
-            seen.append(item)
-    return seen
-
-
-def decide(sinks: list[dict], inputs: list[dict], modules: list[dict], speakers: list[dict]) -> dict:
-    loopbacks = parse_loopbacks(modules)
-    sink_names = {sink["name"] for sink in sinks}
-    wanted = {speaker["token"] for speaker in speakers}
-    load_null = []
-    unload = []
-    move = []
-    mute = []
-    unmute = []
-
-    for row in modules:
-        if row["name"] != "module-null-sink" or "sink_name=airplay_" not in row["argument"]:
-            continue
-        sink_name = _argument_value(row["argument"], "sink_name")
-        token = sink_name.removeprefix("airplay_")
-        if token not in wanted and row.get("index") is not None:
-            unload.append(row["index"])
-
-    for item in loopbacks:
-        if item.get("index") is not None:
-            unload.append(item["index"])
-
+def decide(
+    nodes: list[dict],
+    speakers: list[dict],
+    saved: set[str] | None = None,
+    links: list[dict] | None = None,
+) -> dict:
+    saved = set(saved or [])
+    links = list(links or [])
+    names = {node["name"] for node in nodes}
+    silence = []
+    restore = []
+    present = []
     for speaker in speakers:
         token = speaker["token"]
-        hold = f"airplay_{token}"
-        if hold not in sink_names:
-            load_null.append(hold)
-        bluez = _bluez_for(sinks, token)
-        stream = _airplay_stream(inputs, token)
-        active = bool(speaker["playing"]) or (stream is not None and stream.get("state") == "RUNNING")
-        if stream is not None and stream.get("index") is not None:
-            if stream.get("mute"):
-                unmute.append(stream["index"])
-            if bluez is not None and not _on_speaker(stream, bluez):
-                move.append({"index": stream["index"], "sink": bluez["name"]})
-        if bluez is None:
-            continue
-        for item in inputs:
-            if item.get("index") is None or not _on_speaker(item, bluez):
-                continue
-            if _is_airplay(item, token):
-                continue
-            if active and not item.get("mute"):
-                mute.append(item["index"])
-            if not active and item.get("mute"):
-                unmute.append(item["index"])
-
-    return {
-        "load_null": load_null,
-        "unload": _unique(unload),
-        "load_loopback": [],
-        "move": move,
-        "mute": _unique(mute),
-        "unmute": _unique(unmute),
-    }
+        sink_name = bluez_sink_name(token)
+        if sink_name in names:
+            present.append(token)
+        streams = _streams(nodes, links, token)
+        airplay = [node for node in streams if node.get("application") == airplay_application(token)]
+        active = bool(speaker.get("playing")) or any(node.get("state") == "running" for node in airplay)
+        if active:
+            for node in streams:
+                if node in airplay or node.get("id") is None:
+                    continue
+                silence.append({"id": node["id"], "token": token})
+        elif token in saved:
+            restore.append(token)
+    return {"silence": silence, "restore": restore, "present": present}
 
 
-def mark_ready(speakers: list[dict], sinks: list[dict], ready_dir: Path = READY_DIR) -> None:
-    names = {sink["name"] for sink in sinks}
+def mark_ready(speakers: list[dict], nodes: list[dict], ready_dir: Path = READY_DIR) -> None:
+    names = {node["name"] for node in nodes}
     try:
         ready_dir.mkdir(parents=True, exist_ok=True)
     except OSError:
@@ -231,7 +150,7 @@ def mark_ready(speakers: list[dict], sinks: list[dict], ready_dir: Path = READY_
         wanted.add(token)
         path = ready_dir / token
         try:
-            if f"airplay_{token}" in names:
+            if bluez_sink_name(token) in names:
                 if not path.exists():
                     path.write_text(token + "\n", encoding="utf-8")
             elif path.exists():
@@ -246,43 +165,78 @@ def mark_ready(speakers: list[dict], sinks: list[dict], ready_dir: Path = READY_
         return
 
 
-def apply_once(run, devices_path: Path = DEVICES_PATH, ready_dir: Path = READY_DIR) -> None:
-    sinks = parse_sinks(_output(run, ["pactl", "-f", "json", "list", "sinks"]))
-    inputs = parse_inputs(_output(run, ["pactl", "-f", "json", "list", "sink-inputs"]))
-    modules = parse_modules(_output(run, ["pactl", "-f", "json", "list", "modules"]))
+class VolumeMemory:
+    def __init__(self) -> None:
+        self.by_token: dict[str, float] = {}
+
+    def remember(self, token: str, volume: float | None) -> None:
+        if token in self.by_token or volume is None or volume <= 0:
+            return
+        self.by_token[token] = volume
+
+    def pop(self, token: str) -> float | None:
+        return self.by_token.pop(token, None)
+
+
+def read_volume(text: str) -> float | None:
+    for token in text.split():
+        try:
+            value = float(token)
+        except ValueError:
+            continue
+        if 0 <= value <= 2:
+            return value
+    return None
+
+
+def format_volume(value: float) -> str:
+    text = f"{value:.3f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def apply_once(
+    run,
+    devices_path: Path = DEVICES_PATH,
+    ready_dir: Path = READY_DIR,
+    memory: VolumeMemory | None = None,
+) -> None:
+    if memory is None:
+        memory = VolumeMemory()
+    nodes, links = parse_dump(_output(run, ["pw-dump"]))
     speakers = read_speakers(devices_path)
-    mark_ready(speakers, sinks, ready_dir)
-    decision = decide(sinks, inputs, modules, speakers)
-    for index in decision["unload"]:
-        run(["pactl", "unload-module", str(index)])
-    for name in decision["load_null"]:
-        run(
-            [
-                "pactl",
-                "load-module",
-                "module-null-sink",
-                f"sink_name={name}",
-                "rate=44100",
-                "channels=2",
-            ]
-        )
-    for item in decision["move"]:
-        run(["pactl", "move-sink-input", str(item["index"]), item["sink"]])
-    for index in decision["mute"]:
-        run(["pactl", "set-sink-input-mute", str(index), "1"])
-    for index in decision["unmute"]:
-        run(["pactl", "set-sink-input-mute", str(index), "0"])
+    mark_ready(speakers, nodes, ready_dir)
+    decision = decide(nodes, speakers, saved=set(memory.by_token), links=links)
+    for item in decision["silence"]:
+        node_id = str(item["id"])
+        memory.remember(item["token"], read_volume(_text(run, ["wpctl", "get-volume", node_id])))
+        run(["wpctl", "set-mute", node_id, "1"])
+        run(["wpctl", "set-volume", node_id, "0"])
+    for token in decision["restore"]:
+        volume = memory.pop(token)
+        for node in _streams(nodes, links, token):
+            if node.get("id") is None or node.get("application") == airplay_application(token):
+                continue
+            node_id = str(node["id"])
+            if volume is not None:
+                run(["wpctl", "set-volume", node_id, format_volume(volume)])
+            run(["wpctl", "set-mute", node_id, "0"])
 
 
 def _output(run, args: list[str]) -> str:
     completed = run(args)
     if getattr(completed, "returncode", 1) != 0:
-        raise RuntimeError(getattr(completed, "stderr", "") or "pactl falhou")
-    return completed.stdout
+        raise RuntimeError(getattr(completed, "stderr", "") or "pw-dump falhou")
+    return completed.stdout or ""
+
+
+def _text(run, args: list[str]) -> str:
+    completed = run(args)
+    return getattr(completed, "stdout", "") or ""
 
 
 def main() -> None:
     once = "--once" in sys.argv[1:]
+    memory = VolumeMemory()
 
     def run(args: list[str]):
         import subprocess
@@ -291,15 +245,15 @@ def main() -> None:
 
     if once:
         try:
-            apply_once(run)
-        except Exception:
-            return
+            apply_once(run, memory=memory)
+        except Exception as exc:
+            print(f"airplay-link: {exc}", file=sys.stderr)
         return
     while True:
         try:
-            apply_once(run)
-        except Exception:
-            pass
+            apply_once(run, memory=memory)
+        except Exception as exc:
+            print(f"airplay-link: {exc}", file=sys.stderr)
         time.sleep(1)
 
 

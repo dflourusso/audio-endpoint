@@ -82,7 +82,7 @@ sessioncontrol =
 
 pulseaudio =
 {{
-  sink = "airplay_{token}";
+  sink = "bluez_output.{token}.1";
   application_name = "AirPlay {token}";
 }};
 """

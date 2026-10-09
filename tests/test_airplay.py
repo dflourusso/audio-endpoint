@@ -4,7 +4,7 @@ from pathlib import Path
 
 import httpx
 
-from airplay_link import decide, mark_ready, parse_inputs, parse_modules, parse_sinks
+from airplay_link import VolumeMemory, apply_once, decide, mark_ready, parse_dump
 from app.airplay import AirPlaySwitch, RecoveryClock, supervise
 from app.airplay_speakers import SpeakerStore, clean_webhook
 from audio_endpoint_agent import HostControl, dispatch
@@ -39,7 +39,7 @@ def test_each_speaker_gets_its_own_airplay(tmp_path):
     assert 'name = "Sala @ audio-sala"' in sala
     assert 'port = 7000' in sala
     assert "airplay_device_id_offset = 0" in sala
-    assert 'sink = "airplay_AA_BB_CC_DD_EE_01"' in sala
+    assert 'sink = "bluez_output.AA_BB_CC_DD_EE_01.1"' in sala
     assert 'application_name = "AirPlay AA_BB_CC_DD_EE_01"' in sala
     assert "/notify.sh true AA:BB:CC:DD:EE:01" in sala
     assert 'name = "Suíte \\"A\\" @ audio-sala"' in suite
@@ -74,138 +74,135 @@ def test_webhook_stays_out_of_the_bridge_and_survives_a_rename(tmp_path):
     assert again.webhook_for(SUITE).endswith("/suite")
 
 
-def test_airplay_mutes_only_the_speaker_that_is_playing():
+def _node(node_id, name, media, application="", target="", state="suspended"):
+    return {
+        "id": node_id,
+        "type": "PipeWire:Interface:Node",
+        "info": {
+            "state": state,
+            "props": {
+                "node.name": name,
+                "media.class": media,
+                "application.name": application,
+                "target.object": target,
+            },
+        },
+    }
+
+
+def _graph(*nodes, links=()):
+    payload = list(nodes)
+    for output, input_id in links:
+        payload.append(
+            {
+                "type": "PipeWire:Interface:Link",
+                "info": {"output-node-id": output, "input-node-id": input_id},
+            }
+        )
+    return parse_dump(json.dumps(payload))
+
+
+def test_airplay_silences_only_the_speaker_that_is_playing():
     speakers = [
         {"token": "AA_BB_CC_DD_EE_01", "playing": True},
         {"token": "AA_BB_CC_DD_EE_02", "playing": False},
     ]
-    sinks = parse_sinks(json.dumps([
-        {"index": 1, "name": "airplay_AA_BB_CC_DD_EE_01", "state": "RUNNING"},
-        {"index": 2, "name": "airplay_AA_BB_CC_DD_EE_02", "state": "RUNNING"},
-        {"index": 3, "name": "bluez_output.AA_BB_CC_DD_EE_01.1", "state": "RUNNING"},
-        {"index": 4, "name": "bluez_output.AA_BB_CC_DD_EE_02.1", "state": "IDLE"},
-    ]))
-    inputs = parse_inputs(json.dumps([
-        {"index": 10, "sink": 3, "mute": False, "ownerModule": 8, "properties": {"application.name": "Sendspin"}},
-        {"index": 11, "sink": 4, "mute": False, "ownerModule": 8, "properties": {"application.name": "Sendspin"}},
-        {"index": 12, "sink": 3, "mute": False, "ownerModule": 9, "properties": {"application.name": "Loopback"}},
-    ]))
-    modules = parse_modules(json.dumps([
-        {"name": "module-null-sink", "index": 20, "argument": "sink_name=airplay_AA_BB_CC_DD_EE_01"},
-        {"name": "module-null-sink", "index": 21, "argument": "sink_name=airplay_AA_BB_CC_DD_EE_02"},
-        {"name": "module-loopback", "index": 9, "argument": "source=airplay_AA_BB_CC_DD_EE_01.monitor sink=bluez_output.AA_BB_CC_DD_EE_01.1"},
-        {"name": "module-loopback", "index": 10, "argument": "source=airplay_AA_BB_CC_DD_EE_02.monitor sink=bluez_output.AA_BB_CC_DD_EE_02.1"},
-    ]))
-    decision = decide(sinks, inputs, modules, speakers)
-    assert decision["mute"] == [10, 12]
-    assert decision["unmute"] == []
-    assert decision["load_null"] == []
-    assert decision["unload"] == [9, 10]
-    assert decision["load_loopback"] == []
-    assert decision["move"] == []
-
-
-def test_missing_speaker_keeps_its_sink_and_drops_the_loopback():
-    sinks = parse_sinks('[{"index": 1, "name": "airplay_AA_BB_CC_DD_EE_01", "state": "RUNNING"}]')
-    modules = parse_modules(
-        '[{"name": "module-loopback", "index": 4, "argument": "source=airplay_AA_BB_CC_DD_EE_01.monitor sink=bluez_output.AA_BB_CC_DD_EE_01.1"}]'
+    nodes, links = _graph(
+        _node(3, "bluez_output.AA_BB_CC_DD_EE_01.1", "Audio/Sink"),
+        _node(4, "bluez_output.AA_BB_CC_DD_EE_02.1", "Audio/Sink"),
+        _node(10, "sendspin-sala", "Stream/Output/Audio", "Sendspin", "bluez_output.AA_BB_CC_DD_EE_01.1"),
+        _node(11, "sendspin-suite", "Stream/Output/Audio", "Sendspin", "bluez_output.AA_BB_CC_DD_EE_02.1"),
+        _node(12, "airplay-sala", "Stream/Output/Audio", "AirPlay AA_BB_CC_DD_EE_01", "bluez_output.AA_BB_CC_DD_EE_01.1", "running"),
     )
-    decision = decide(sinks, [], modules, [{"token": "AA_BB_CC_DD_EE_01", "playing": True}])
-    assert decision["unload"] == [4]
-    assert decision["load_loopback"] == []
-    assert decision["mute"] == []
-    gone = decide(sinks, [], modules, [])
-    assert gone["unload"] == [4]
+    decision = decide(nodes, speakers, links=links)
+    assert [item["id"] for item in decision["silence"]] == [10]
+    assert decision["restore"] == []
 
 
-def test_airplay_moves_onto_the_speaker_and_mutes_sendspin_named_with_the_mac():
-    speakers = [{"token": "AA_BB_CC_DD_EE_01", "playing": True}]
-    sinks = parse_sinks(json.dumps([
-        {"index": 1, "name": "airplay_AA_BB_CC_DD_EE_01", "state": "RUNNING"},
-        {"index": 3, "name": "bluez_output.AA_BB_CC_DD_EE_01.1", "state": "SUSPENDED"},
-    ]))
-    inputs = parse_inputs(json.dumps([
-        {
-            "index": 10,
-            "sink": {"index": 3, "name": "bluez_output.AA_BB_CC_DD_EE_01.1"},
-            "mute": False,
-            "properties": {
-                "application.name": "Sendspin",
-                "media.name": "bluez_output.AA_BB_CC_DD_EE_01.1",
-            },
-        },
-        {
-            "index": 12,
-            "sink": 1,
-            "mute": True,
-            "state": "RUNNING",
-            "properties": {"application.name": "AirPlay AA_BB_CC_DD_EE_01"},
-        },
-    ]))
-    modules = parse_modules(json.dumps([
-        {"name": "module-null-sink", "index": 20, "argument": "sink_name=airplay_AA_BB_CC_DD_EE_01"},
-        {
-            "name": "module-loopback",
-            "index": 9,
-            "argument": "source=airplay_AA_BB_CC_DD_EE_01.monitor sink=bluez_output.AA_BB_CC_DD_EE_01.1",
-        },
-    ]))
-    decision = decide(sinks, inputs, modules, speakers)
-    assert decision["move"] == [{"index": 12, "sink": "bluez_output.AA_BB_CC_DD_EE_01.1"}]
-    assert decision["mute"] == [10]
-    assert decision["unmute"] == [12]
-    assert decision["unload"] == [9]
-    assert decision["load_loopback"] == []
+def test_stream_linked_to_the_speaker_is_silenced_without_a_target():
+    nodes, links = _graph(
+        _node(3, "bluez_output.AA_BB_CC_DD_EE_01.1", "Audio/Sink"),
+        _node(10, "sendspin-sala", "Stream/Output/Audio", "Sendspin"),
+        links=[(10, 3)],
+    )
+    decision = decide(nodes, [{"token": "AA_BB_CC_DD_EE_01", "playing": True}], links=links)
+    assert [item["id"] for item in decision["silence"]] == [10]
 
 
 def test_running_airplay_without_the_flag_still_takes_the_speaker():
-    sinks = parse_sinks(json.dumps([
-        {"index": 3, "name": "bluez_output.AA_BB_CC_DD_EE_01.1", "state": "RUNNING"},
-    ]))
-    inputs = parse_inputs(json.dumps([
-        {"index": 10, "sink": 3, "mute": False, "properties": {"application.name": "Sendspin"}},
-        {
-            "index": 12,
-            "sink": 3,
-            "mute": False,
-            "state": "RUNNING",
-            "properties": {"application.name": "AirPlay AA_BB_CC_DD_EE_01"},
-        },
-    ]))
-    decision = decide(sinks, inputs, [], [{"token": "AA_BB_CC_DD_EE_01", "playing": False}])
-    assert decision["move"] == []
-    assert decision["mute"] == [10]
-    assert 12 not in decision["mute"]
+    nodes, links = _graph(
+        _node(3, "bluez_output.AA_BB_CC_DD_EE_01.1", "Audio/Sink"),
+        _node(10, "sendspin-sala", "Stream/Output/Audio", "Sendspin", "bluez_output.AA_BB_CC_DD_EE_01.1"),
+        _node(12, "airplay-sala", "Stream/Output/Audio", "AirPlay AA_BB_CC_DD_EE_01", "bluez_output.AA_BB_CC_DD_EE_01.1", "running"),
+    )
+    decision = decide(nodes, [{"token": "AA_BB_CC_DD_EE_01", "playing": False}], links=links)
+    assert [item["id"] for item in decision["silence"]] == [10]
 
 
 def test_ended_session_returns_the_speaker_to_music_assistant():
-    sinks = parse_sinks(json.dumps([
-        {"index": 3, "name": "bluez_output.AA_BB_CC_DD_EE_01.1", "state": "RUNNING"},
-    ]))
-    inputs = parse_inputs(json.dumps([
-        {"index": 10, "sink": "bluez_output.AA_BB_CC_DD_EE_01.1", "mute": True, "properties": {"application.name": "Sendspin"}},
-    ]))
-    decision = decide(sinks, inputs, [], [{"token": "AA_BB_CC_DD_EE_01", "playing": False}])
-    assert decision["unmute"] == [10]
-    assert decision["mute"] == []
-    assert decision["move"] == []
+    nodes, links = _graph(
+        _node(3, "bluez_output.AA_BB_CC_DD_EE_01.1", "Audio/Sink"),
+        _node(10, "sendspin-sala", "Stream/Output/Audio", "Sendspin", "bluez_output.AA_BB_CC_DD_EE_01.1"),
+    )
+    decision = decide(
+        nodes,
+        [{"token": "AA_BB_CC_DD_EE_01", "playing": False}],
+        saved={"AA_BB_CC_DD_EE_01"},
+        links=links,
+    )
+    assert decision["silence"] == []
+    assert decision["restore"] == ["AA_BB_CC_DD_EE_01"]
 
 
-def test_ready_stamp_follows_the_sink(tmp_path):
+def test_ready_stamp_follows_the_bluetooth_sink(tmp_path):
     ready = tmp_path / "ready"
     speakers = [{"token": "AA_BB_CC_DD_EE_01", "playing": False}]
-    sinks = parse_sinks('[{"index": 1, "name": "airplay_AA_BB_CC_DD_EE_01", "state": "IDLE"}]')
-    mark_ready(speakers, sinks, ready)
+    nodes, _links = _graph(_node(3, "bluez_output.AA_BB_CC_DD_EE_01.1", "Audio/Sink"))
+    mark_ready(speakers, nodes, ready)
     stamp = ready / "AA_BB_CC_DD_EE_01"
     assert stamp.is_file()
     first = stamp.stat().st_mtime_ns
-    mark_ready(speakers, sinks, ready)
+    mark_ready(speakers, nodes, ready)
     assert stamp.stat().st_mtime_ns == first
     mark_ready(speakers, [], ready)
     assert not stamp.exists()
-    mark_ready(speakers, sinks, ready)
-    mark_ready([], sinks, ready)
+    mark_ready(speakers, nodes, ready)
+    mark_ready([], nodes, ready)
     assert not stamp.exists()
+
+
+def test_apply_silences_with_wpctl_and_restores_the_saved_volume(tmp_path):
+    dump = json.dumps([
+        _node(3, "bluez_output.AA_BB_CC_DD_EE_01.1", "Audio/Sink"),
+        _node(10, "sendspin-sala", "Stream/Output/Audio", "Sendspin", "bluez_output.AA_BB_CC_DD_EE_01.1"),
+    ])
+    calls = []
+
+    def run(args):
+        calls.append(list(args))
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = dump if args[0] == "pw-dump" else "Volume: 0.42\n"
+
+        return Result()
+
+    devices = tmp_path / "devices.json"
+    devices.write_text(json.dumps([{"token": "AA_BB_CC_DD_EE_01", "playing": True}]), encoding="utf-8")
+    memory = VolumeMemory()
+    apply_once(run, devices, tmp_path / "ready", memory)
+    assert ["wpctl", "set-mute", "10", "1"] in calls
+    assert ["wpctl", "set-volume", "10", "0"] in calls
+    assert memory.by_token["AA_BB_CC_DD_EE_01"] == 0.42
+    assert not any(args[0] == "pactl" for args in calls)
+
+    calls.clear()
+    devices.write_text(json.dumps([{"token": "AA_BB_CC_DD_EE_01", "playing": False}]), encoding="utf-8")
+    apply_once(run, devices, tmp_path / "ready", memory)
+    assert ["wpctl", "set-volume", "10", "0.42"] in calls
+    assert ["wpctl", "set-mute", "10", "0"] in calls
+    assert "AA_BB_CC_DD_EE_01" not in memory.by_token
 
 
 def test_webhook_fires_only_for_the_speaker_that_started(tmp_path):

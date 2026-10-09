@@ -36,11 +36,8 @@ while true; do
         pid=$(cat "$pidfile")
       fi
       ready="$ready_dir/$base"
-      if [ ! -f "$ready" ]; then
-        continue
-      fi
       if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-        if [ "$conf" -nt "$pidfile" ] || [ "$ready" -nt "$pidfile" ]; then
+        if [ "$conf" -nt "$pidfile" ] || { [ -f "$ready" ] && [ "$ready" -nt "$pidfile" ]; }; then
           kill -TERM "$pid" 2>/dev/null || true
           pid=""
         fi
