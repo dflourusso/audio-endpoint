@@ -225,6 +225,37 @@ def test_apply_silences_with_wpctl_and_restores_the_saved_volume(tmp_path):
     assert "AA_BB_CC_DD_EE_01" not in memory.by_token
 
 
+def test_quiet_bluetooth_sink_is_raised_while_airplay_plays(tmp_path):
+    dump = json.dumps([
+        _node(59, "bluez_output.4C_14_84_D5_47_59.1", "Audio/Sink"),
+        _node(71, "airplay", "Stream/Output/Audio", "AirPlay 4C_14_84_D5_47_59", "bluez_output.4C_14_84_D5_47_59.1", "idle"),
+    ])
+    calls = []
+
+    def run(args):
+        calls.append(list(args))
+
+        class Result:
+            returncode = 0
+            stderr = ""
+            stdout = dump if args[0] == "pw-dump" else "Volume: 0.12\n"
+
+        return Result()
+
+    devices = tmp_path / "devices.json"
+    devices.write_text(json.dumps([{"token": "4C_14_84_D5_47_59", "playing": True}]), encoding="utf-8")
+    memory = VolumeMemory()
+    apply_once(run, devices, tmp_path / "ready", memory)
+    assert ["wpctl", "set-volume", "59", "0.8"] in calls
+    assert memory.sink_by_token["4C_14_84_D5_47_59"] == 0.12
+
+    calls.clear()
+    devices.write_text(json.dumps([{"token": "4C_14_84_D5_47_59", "playing": False}]), encoding="utf-8")
+    apply_once(run, devices, tmp_path / "ready", memory)
+    assert ["wpctl", "set-volume", "59", "0.12"] in calls
+    assert "4C_14_84_D5_47_59" not in memory.sink_by_token
+
+
 def test_webhook_fires_only_for_the_speaker_that_started(tmp_path):
     store = _store(tmp_path)
     store.set_webhook(SUITE, "http://192.168.0.100:8123/api/webhook/suite")
