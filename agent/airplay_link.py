@@ -1,8 +1,7 @@
 """Cala o Sendspin da caixa enquanto o AirPlay dela está ativo.
 
-O Shairport abre o sink Bluetooth pelo nome. Este processo emudece
-os outros fluxos dessa caixa, com wpctl, sobe o volume do sink se ele
-estiver baixo demais para se ouvir, e devolve tudo quando a sessão acaba.
+O Shairport abre o sink Bluetooth pelo nome. Este processo só emudece
+os outros fluxos dessa caixa, com wpctl, e os devolve quando a sessão acaba.
 """
 
 import json
@@ -15,8 +14,6 @@ DEVICES_PATH = Path("/run/audio-endpoint/airplay/devices.json")
 READY_DIR = Path("/run/audio-endpoint/airplay/ready")
 
 STREAM = "Stream/Output/Audio"
-SINK_VOLUME_FLOOR = 0.40
-SINK_VOLUME_TARGET = 0.80
 
 
 def bluez_sink_name(token: str) -> str:
@@ -139,7 +136,6 @@ def decide(
     silence = []
     restore = []
     present = []
-    boost = []
     for speaker in speakers:
         token = speaker["token"]
         sink_name = bluez_sink_name(token)
@@ -149,16 +145,13 @@ def decide(
         airplay = [node for node in streams if node.get("application") == airplay_application(token)]
         active = bool(speaker.get("playing")) or any(node.get("state") == "running" for node in airplay)
         if active:
-            sink_id = _sink_id(nodes, sink_name)
-            if sink_id is not None:
-                boost.append({"id": sink_id, "token": token})
             for node in streams:
                 if node in airplay or node.get("id") is None:
                     continue
                 silence.append({"id": node["id"], "token": token})
         elif token in saved:
             restore.append(token)
-    return {"silence": silence, "restore": restore, "present": present, "boost": boost}
+    return {"silence": silence, "restore": restore, "present": present}
 
 
 def prepare_ready_dir(path: Path, uid: int | None = None, gid: int | None = None) -> None:
@@ -200,7 +193,6 @@ def mark_ready(speakers: list[dict], nodes: list[dict], ready_dir: Path = READY_
 class VolumeMemory:
     def __init__(self) -> None:
         self.by_token: dict[str, float] = {}
-        self.sink_by_token: dict[str, float] = {}
 
     def remember(self, token: str, volume: float | None) -> None:
         if token in self.by_token or volume is None or volume <= 0:
@@ -209,14 +201,6 @@ class VolumeMemory:
 
     def pop(self, token: str) -> float | None:
         return self.by_token.pop(token, None)
-
-    def remember_sink(self, token: str, volume: float | None) -> None:
-        if token in self.sink_by_token or volume is None or volume <= 0:
-            return
-        self.sink_by_token[token] = volume
-
-    def pop_sink(self, token: str) -> float | None:
-        return self.sink_by_token.pop(token, None)
 
 
 def read_volume(text: str) -> float | None:
@@ -246,34 +230,14 @@ def apply_once(
     nodes, links = parse_dump(_output(run, ["pw-dump"]))
     speakers = read_speakers(devices_path)
     mark_ready(speakers, nodes, ready_dir)
-    decision = decide(
-        nodes,
-        speakers,
-        saved=set(memory.by_token) | set(memory.sink_by_token),
-        links=links,
-    )
+    decision = decide(nodes, speakers, saved=set(memory.by_token), links=links)
     for item in decision["silence"]:
         node_id = str(item["id"])
         memory.remember(item["token"], read_volume(_text(run, ["wpctl", "get-volume", node_id])))
         run(["wpctl", "set-mute", node_id, "1"])
         run(["wpctl", "set-volume", node_id, "0"])
-    for item in decision["boost"]:
-        node_id = str(item["id"])
-        current = read_volume(_text(run, ["wpctl", "get-volume", node_id]))
-        memory.remember_sink(item["token"], current)
-        if current is None or current < SINK_VOLUME_FLOOR:
-            # region agent log
-            print(
-                f"airplay-link: sink-volume {item['token']} {current} -> {SINK_VOLUME_TARGET}",
-                file=sys.stderr,
-                flush=True,
-            )
-            # endregion
-            run(["wpctl", "set-mute", node_id, "0"])
-            run(["wpctl", "set-volume", node_id, format_volume(SINK_VOLUME_TARGET)])
     for token in decision["restore"]:
         volume = memory.pop(token)
-        sink_volume = memory.pop_sink(token)
         for node in _streams(nodes, links, token):
             if node.get("id") is None or node.get("application") == airplay_application(token):
                 continue
@@ -281,9 +245,6 @@ def apply_once(
             if volume is not None:
                 run(["wpctl", "set-volume", node_id, format_volume(volume)])
             run(["wpctl", "set-mute", node_id, "0"])
-        sink_id = _sink_id(nodes, bluez_sink_name(token))
-        if sink_id is not None and sink_volume is not None:
-            run(["wpctl", "set-volume", str(sink_id), format_volume(sink_volume)])
 
 
 def _output(run, args: list[str]) -> str:
