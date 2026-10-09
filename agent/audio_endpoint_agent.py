@@ -77,6 +77,7 @@ class HostControl:
         self.restart_avahi()
 
     def retire_airplay(self) -> None:
+        self.run(["docker", "rm", "-f", "shairport-sync"])
         leftover = Path("/etc/pipewire/pipewire.conf.d/10-audio-endpoint-airplay.conf")
         if leftover.is_file():
             leftover.unlink()
