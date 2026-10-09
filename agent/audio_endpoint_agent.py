@@ -12,7 +12,6 @@ import threading
 import time
 from pathlib import Path
 
-from airplay_link import READY_DIR, prepare_ready_dir
 from wifi_setup import WifiInputError, WifiManager
 
 HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -67,7 +66,6 @@ class HostControl:
         self._update_lock = threading.Lock()
         self._updating = False
         self.wifi = WifiManager(self.run)
-        self.airplay_pid_dir = Path(os.environ.get("AIRPLAY_PID_DIR", "/run/audio-endpoint/airplay/pids"))
 
     def set_hostname(self, hostname: str) -> None:
         completed = self.run(["hostnamectl", "set-hostname", hostname])
@@ -77,79 +75,16 @@ class HostControl:
         if hosts.is_file():
             hosts.write_text(update_hosts(hosts.read_text(encoding="utf-8"), hostname), encoding="utf-8")
         self.restart_avahi()
-        try:
-            self.ensure_airplay()
-        except Exception:
-            return
 
-    def ensure_airplay(self) -> None:
-        self._prepare_airplay_ready()
-        self._retire_static_sink()
-        self._install_airplay_link()
-
-    def _prepare_airplay_ready(self) -> None:
-        uid, gid = self._audio_ids()
-        prepare_ready_dir(READY_DIR, uid, gid)
-
-    def _audio_ids(self) -> tuple[int | None, int | None]:
-        completed = self.run(["getent", "passwd", "audioendpoint"])
-        parts = completed.stdout.split(":") if completed.returncode == 0 else []
-        if len(parts) < 4 or not parts[2].isdigit() or not parts[3].isdigit():
-            return None, None
-        return int(parts[2]), int(parts[3])
-
-    def drop_airplay(self, mac: str) -> None:
-        token = mac.replace(":", "_")
-        pidfile = self.airplay_pid_dir / token
-        try:
-            pid = pidfile.read_text(encoding="utf-8").strip()
-        except OSError as exc:
-            raise RuntimeError("A sessão AirPlay dessa caixa não está no ar.") from exc
-        if not pid.isdigit():
-            raise RuntimeError("A sessão AirPlay dessa caixa não está no ar.")
-        completed = self.run(["docker", "exec", "shairport-sync", "kill", "-TERM", pid])
-        if completed.returncode != 0:
-            raise RuntimeError(completed.stderr.strip() or "Não foi possível encerrar a sessão AirPlay.")
-
-    def apply_airplay_audio(self) -> None:
-        script = self.root / "agent" / "airplay_link.py"
-        self._as_audio_user(["python3", str(script), "--once"])
-
-    def airplay_status(self) -> dict:
-        completed = self.run(["docker", "inspect", "-f", "{{.State.Running}}", "shairport-sync"])
-        running = completed.returncode == 0 and completed.stdout.strip() == "true"
-        return {"ok": True, "running": running}
-
-    def _retire_static_sink(self) -> None:
-        target = Path("/etc/pipewire/pipewire.conf.d/10-audio-endpoint-airplay.conf")
-        if not target.is_file():
-            return
-        target.unlink()
-        self._as_audio_user(
-            [
-                "systemctl",
-                "--user",
-                "restart",
-                "pipewire.service",
-                "pipewire-pulse.service",
-                "wireplumber.service",
-            ]
-        )
-
-    def _install_airplay_link(self) -> None:
-        source = self.root / "agent" / "audio-endpoint-airplay-link.service"
-        if not source.is_file():
-            return
-        home = self._audio_home()
-        directory = Path(home) / ".config" / "systemd" / "user"
-        directory.mkdir(parents=True, exist_ok=True)
-        target = directory / "audio-endpoint-airplay-link.service"
-        desired = source.read_text(encoding="utf-8")
-        if not target.is_file() or target.read_text(encoding="utf-8") != desired:
-            target.write_text(desired, encoding="utf-8")
-        self._as_audio_user(["systemctl", "--user", "daemon-reload"])
-        self._as_audio_user(["systemctl", "--user", "enable", "--now", "audio-endpoint-airplay-link.service"])
-        self._as_audio_user(["systemctl", "--user", "restart", "audio-endpoint-airplay-link.service"])
+    def retire_airplay(self) -> None:
+        leftover = Path("/etc/pipewire/pipewire.conf.d/10-audio-endpoint-airplay.conf")
+        if leftover.is_file():
+            leftover.unlink()
+        unit = Path(self._audio_home()) / ".config" / "systemd" / "user" / "audio-endpoint-airplay-link.service"
+        self._as_audio_user(["systemctl", "--user", "disable", "--now", "audio-endpoint-airplay-link.service"])
+        if unit.is_file():
+            unit.unlink()
+            self._as_audio_user(["systemctl", "--user", "daemon-reload"])
 
     def _audio_home(self) -> str:
         completed = self.run(["getent", "passwd", "audioendpoint"])
@@ -226,13 +161,14 @@ class HostControl:
                     str(self.root),
                     "pull",
                     "sendspin-bridge",
-                    "shairport-sync",
                 ]
             )
             if pulled.returncode != 0:
                 self._write_update("failed", pulled.stderr.strip() or "docker compose pull falhou")
                 return
-            up = self.run(["docker", "compose", "--project-directory", str(self.root), "up", "-d", "--build"])
+            up = self.run(
+                ["docker", "compose", "--project-directory", str(self.root), "up", "-d", "--build", "--remove-orphans"]
+            )
             if up.returncode != 0:
                 self._write_update("failed", up.stderr.strip() or "docker compose up falhou")
                 return
@@ -436,17 +372,6 @@ def dispatch(payload: dict, control: HostControl) -> dict:
         if action == "restart-app":
             control.restart_app()
             return {"ok": True, "message": "A interface vai reiniciar em instantes."}
-        if action == "drop-airplay":
-            mac = str(payload.get("mac") or "").strip().upper()
-            if not _MAC_RE.fullmatch(mac):
-                return {"ok": False, "error": "invalid_mac", "message": "MAC inválido."}
-            control.drop_airplay(mac)
-            return {"ok": True}
-        if action == "airplay-audio":
-            control.apply_airplay_audio()
-            return {"ok": True}
-        if action == "airplay-status":
-            return control.airplay_status()
         if action == "reboot":
             control.reboot()
             return {"ok": True, "message": "O aparelho vai reiniciar."}
@@ -527,7 +452,7 @@ def main() -> None:
     except Exception:
         pass
     try:
-        control.ensure_airplay()
+        control.retire_airplay()
     except Exception:
         pass
     try:

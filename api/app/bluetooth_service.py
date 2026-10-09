@@ -1,3 +1,4 @@
+import threading
 import time
 
 from app.bridge import BridgeClient, BridgeError
@@ -47,13 +48,12 @@ def _player_name_for(mac: str, device: dict, status: dict | None) -> str:
     return str(device.get("player_name") or "").strip()
 
 
-def bluetooth_recovery(status: dict | None, config: dict | None, airplay_playing: set[str] | None = None) -> list[dict]:
+def bluetooth_recovery(status: dict | None, config: dict | None) -> list[dict]:
     """Caixas sem vínculo que precisam ser chamadas de novo.
 
     `reclaim` liga de novo o gerenciamento que o bridge desligou sozinho.
-    `urgent` é play do AirPlay ou do Music Assistant com o Bluetooth caído.
+    `urgent` é play do Music Assistant com o Bluetooth caído.
     """
-    playing = {str(mac or "").strip().upper() for mac in (airplay_playing or set())}
     rows = {_live_mac(row): row for row in live_rows(status)}
     actions = []
     seen = set()
@@ -68,7 +68,7 @@ def bluetooth_recovery(status: dict | None, config: dict | None, airplay_playing
             continue
         status_released = str((status or {}).get("bt_released_by") or "") == "auto" and _live_mac(status or {}) == mac
         reclaim = bool(device.get("released") and device.get("released_by") == "auto") or status_released
-        urgent = mac in playing or bool(live.get("playing"))
+        urgent = bool(live.get("playing"))
         if not reclaim and not urgent:
             continue
         seen.add(mac)
@@ -88,10 +88,55 @@ def auto_released_player(status: dict | None, config: dict | None) -> str:
         name = str((status or {}).get("player_name") or "").strip()
         if name:
             return name
-    for action in bluetooth_recovery(status, config, set()):
+    for action in bluetooth_recovery(status, config):
         if action["reclaim"] and action["player_name"]:
             return action["player_name"]
     return ""
+
+
+class RecoveryClock:
+    """A primeira chamada sai na hora. As seguintes esperam o intervalo, também se a anterior falhou."""
+
+    def __init__(self, interval: float = 30.0):
+        self.interval = interval
+        self._next: dict[str, float] = {}
+        self._nudged: set[str] = set()
+
+    def ready(self, mac: str, urgent: bool, now: float) -> bool:
+        if not urgent:
+            self._nudged.discard(mac)
+        elif mac not in self._nudged:
+            self._nudged.add(mac)
+            self._next[mac] = now + self.interval
+            return True
+        if now >= self._next.get(mac, 0.0):
+            self._next[mac] = now + self.interval
+            return True
+        return False
+
+
+def watch_bluetooth(bridge, recover, stop: threading.Event, interval: float = 1.0, recover_interval: float = 30.0) -> None:
+    clock = RecoveryClock(recover_interval)
+    while not stop.is_set():
+        try:
+            status = bridge.status()
+        except Exception:
+            status = None
+        if status is not None:
+            try:
+                config = bridge.config()
+            except Exception:
+                config = None
+            if config is not None:
+                now = time.monotonic()
+                for action in bluetooth_recovery(status, config):
+                    if not clock.ready(action["mac"], action["urgent"], now):
+                        continue
+                    try:
+                        recover(action)
+                    except Exception:
+                        continue
+        stop.wait(interval)
 
 
 def sinkless_speaker(status: dict | None) -> str:

@@ -63,36 +63,9 @@ A página Music Assistant desta interface mostra `ma_connected`. Se estiver agua
 
 O nome exibido é o nome do player mais o `BRIDGE_NAME`. Mudar o hostname pela nossa interface atualiza esse sufixo.
 
-## O iPhone não vê o AirPlay
-
-O anúncio usa o Avahi do host. Não suba outro Avahi.
-
-```bash
-docker ps --filter name=shairport-sync
-docker logs --tail 80 shairport-sync
-avahi-browse -rt _airplay._tcp
-```
-
-O nome no iPhone é o do player mais o hostname, por exemplo `Sala @ audio-sala`. Cada caixa da frota é um anúncio. Sem caixa na frota, a busca não lista este aparelho.
-
-O Shairport escreve no sink Bluetooth da caixa, `bluez_output.` seguido do MAC e `.1`. Com a caixa desligada esse nó não existe, e o anúncio continua. Quando a caixa aparece, o processo dela reinicia uma vez para abrir esse sink.
-
-```bash
-sudo -u audioendpoint env XDG_RUNTIME_DIR=/run/user/$(id -u audioendpoint) wpctl status
-sudo -u audioendpoint env XDG_RUNTIME_DIR=/run/user/$(id -u audioendpoint) systemctl --user status audio-endpoint-airplay-link.service
-```
-
-O segundo comando pode falhar se o linger não estiver ativo. `loginctl enable-linger audioendpoint` e reinicie o serviço do usuário.
-
-## A caixa não liga quando o AirPlay começa
-
-O webhook fica na página Bluetooth, no campo da caixa que precisa ligar. Vazio não chama ninguém. O valor não entra no Git. `AIRPLAY_WEBHOOK_URL` no `.env` não dispara mais. Use o endereço local, `http://<home-assistant>:8123/api/webhook/<identificador>`. O identificador é o segredo. Não use o endereço da Nabu Casa.
-
-A mesma automação pausa o player do Music Assistant. Sem essa pausa, a fila continua contando sem sair som até o AirPlay acabar.
-
 ## Spotify não lista a caixa
 
-No iPhone, o Spotify sai pelo AirPlay do sistema. Não há Spotify Connect nesta placa. No Android, o celular conecta direto na caixa Bluetooth. O plugin do Music Assistant continua sendo o caminho para a biblioteca dele sincronizar a casa.
+Não há Spotify Connect nesta placa. O celular conecta direto na caixa Bluetooth. O plugin do Music Assistant continua sendo o caminho para a biblioteca dele sincronizar a casa.
 
 ## Problemas de áudio
 
@@ -116,7 +89,7 @@ docker compose --project-directory /opt/audio-endpoint ps
 docker compose --project-directory /opt/audio-endpoint logs --tail 80
 ```
 
-Os dois containers de áudio e a API usam `restart: unless-stopped` e a rede do host. Se a API não abrir na porta 80, veja se outro processo já escuta essa porta. O bridge usa 8080 e, por caixa, portas a partir de 8928. O AirPlay 2 usa 7000, e o NQPTP usa 319 e 320. Essas portas ficam só neste aparelho.
+Os containers usam `restart: unless-stopped` e a rede do host. Se a API não abrir na porta 80, veja se outro processo já escuta essa porta. O bridge usa 8080 e, por caixa, portas a partir de 8928. Essas portas ficam só neste aparelho.
 
 Uma atualização interrompida não apaga `bridge/` nem `.env`. O estado fica em `/opt/audio-endpoint/data/update-status.json`. Para voltar:
 

@@ -130,55 +130,25 @@ PY
   chmod 600 "${TARGET}/.env"
 fi
 
-python3 - "${TARGET}/.env" <<'PY'
-from pathlib import Path
-import sys
-path = Path(sys.argv[1])
-text = path.read_text(encoding="utf-8") if path.is_file() else ""
-keys = set()
-for line in text.splitlines():
-    if not line or line.startswith("#") or "=" not in line:
-        continue
-    keys.add(line.split("=", 1)[0])
-extra = []
-if "SHAIRPORT_IMAGE" not in keys:
-    extra.append("SHAIRPORT_IMAGE=mikebrady/shairport-sync:5.5.2")
-if "AIRPLAY_WEBHOOK_URL" not in keys:
-    extra.append("AIRPLAY_WEBHOOK_URL=")
-if extra:
-    if text and not text.endswith("\n"):
-        text += "\n"
-    path.write_text(text + "\n".join(extra) + "\n", encoding="utf-8")
-    path.chmod(0o600)
-PY
-
 install -m 644 "${TARGET}/agent/audio-endpoint-agent.service" /etc/systemd/system/audio-endpoint-agent.service
 systemctl daemon-reload
 systemctl enable --now audio-endpoint-agent.service
 
-python3 "${TARGET}/agent/airplay_config.py" "${TARGET}/config/shairport-sync.conf"
-
 rm -f /etc/pipewire/pipewire.conf.d/10-audio-endpoint-airplay.conf
-sudo -u audioendpoint \
-  XDG_RUNTIME_DIR="/run/user/${audio_uid}" \
-  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${audio_uid}/bus" \
-  systemctl --user restart pipewire.service pipewire-pulse.service wireplumber.service || true
+unit="/var/lib/audioendpoint/.config/systemd/user/audio-endpoint-airplay-link.service"
+if [[ -f "${unit}" ]]; then
+  sudo -u audioendpoint \
+    XDG_RUNTIME_DIR="/run/user/${audio_uid}" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${audio_uid}/bus" \
+    systemctl --user disable --now audio-endpoint-airplay-link.service || true
+  rm -f "${unit}"
+  sudo -u audioendpoint \
+    XDG_RUNTIME_DIR="/run/user/${audio_uid}" \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${audio_uid}/bus" \
+    systemctl --user daemon-reload || true
+fi
 
-unit_dir="/var/lib/audioendpoint/.config/systemd/user"
-install -d -o audioendpoint -g audioendpoint "${unit_dir}"
-install -m 644 -o audioendpoint -g audioendpoint \
-  "${TARGET}/agent/audio-endpoint-airplay-link.service" \
-  "${unit_dir}/audio-endpoint-airplay-link.service"
-sudo -u audioendpoint \
-  XDG_RUNTIME_DIR="/run/user/${audio_uid}" \
-  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${audio_uid}/bus" \
-  systemctl --user daemon-reload || true
-sudo -u audioendpoint \
-  XDG_RUNTIME_DIR="/run/user/${audio_uid}" \
-  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/${audio_uid}/bus" \
-  systemctl --user enable --now audio-endpoint-airplay-link.service || true
-
-docker compose --project-directory "${TARGET}" up -d --build
+docker compose --project-directory "${TARGET}" up -d --build --remove-orphans
 
 name="$(hostname -s)"
 echo

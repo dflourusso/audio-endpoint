@@ -7,13 +7,10 @@ from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.agent_client import AgentClient, AgentError
-from app.airplay import AirPlaySwitch, supervise
-from app.airplay_speakers import SpeakerStore
-from app.bluetooth_service import BluetoothService
+from app.bluetooth_service import BluetoothService, watch_bluetooth
 from app.bridge import BridgeClient, BridgeError
-from app.routers import airplay, audio, bluetooth, maintenance, status, system, wifi
+from app.routers import audio, bluetooth, maintenance, status, system, wifi
 from app.settings import load_settings
-from app.system_info import hostname_of, read_text
 
 SETUP_ALLOWED = {
     "/api/health",
@@ -24,37 +21,25 @@ SETUP_ALLOWED = {
 }
 
 
-def create_app(settings=None, bridge=None, agent=None, supervise_airplay=None) -> FastAPI:
+def create_app(settings=None, bridge=None, agent=None, watch_bluetooth_loop=None) -> FastAPI:
     settings = settings or load_settings()
-    if supervise_airplay is None:
-        supervise_airplay = settings.supervise_airplay
+    if watch_bluetooth_loop is None:
+        watch_bluetooth_loop = settings.watch_bluetooth
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        hostname = hostname_of(read_text(settings.hostname_file)) or ""
-        if hostname:
-            app.state.speakers.republish(hostname)
         stop = threading.Event()
         thread = None
-        if supervise_airplay:
-            def run_switch(stop: threading.Event) -> None:
-                def take_over(mac: str) -> None:
-                    app.state.agent.call("drop-airplay", timeout=15, mac=mac)
-
-                def released() -> None:
-                    try:
-                        app.state.agent.call("airplay-audio", timeout=5)
-                    except AgentError:
-                        return
-
+        if watch_bluetooth_loop:
+            def run_watch(stop: threading.Event) -> None:
                 def recover(action: dict) -> None:
                     if action.get("reclaim"):
                         app.state.bridge.set_bt_management(action["player_name"], True)
                     app.state.bridge.reconnect(action["mac"], action["player_name"])
 
-                supervise(app.state.bridge, app.state.airplay, take_over, stop, released, recover)
+                watch_bluetooth(app.state.bridge, recover, stop)
 
-            thread = threading.Thread(target=run_switch, args=(stop,), daemon=True, name="airplay-switch")
+            thread = threading.Thread(target=run_watch, args=(stop,), daemon=True, name="bluetooth-watch")
             thread.start()
         yield
         stop.set()
@@ -65,8 +50,6 @@ def create_app(settings=None, bridge=None, agent=None, supervise_airplay=None) -
     app.state.settings = settings
     app.state.bridge = bridge or BridgeClient(settings.bridge_url, settings.bridge_token)
     app.state.agent = agent or AgentClient(settings.agent_socket)
-    app.state.speakers = SpeakerStore(settings.config_dir, settings.airplay_run)
-    app.state.airplay = AirPlaySwitch(app.state.speakers)
     app.state.bluetooth = BluetoothService(
         app.state.bridge,
         restarter=lambda: app.state.agent.call("restart-bridge"),
@@ -92,9 +75,7 @@ def create_app(settings=None, bridge=None, agent=None, supervise_airplay=None) -
     async def api_token(request: Request, call_next):
         token = settings.api_token
         path = request.url.path
-        host = request.client.host if request.client else ""
-        local_session = path == "/api/airplay/session" and host in {"127.0.0.1", "::1", "localhost"}
-        if token and path.startswith("/api/") and path != "/api/health" and not local_session:
+        if token and path.startswith("/api/") and path != "/api/health":
             header = request.headers.get("authorization", "")
             if header != f"Bearer {token}":
                 return JSONResponse(status_code=401, content={"error": "unauthorized", "message": "Não autorizado."})
@@ -121,7 +102,6 @@ def create_app(settings=None, bridge=None, agent=None, supervise_airplay=None) -
     def health():
         return {"ok": True}
 
-    app.include_router(airplay.router)
     app.include_router(system.router)
     app.include_router(bluetooth.router)
     app.include_router(audio.router)

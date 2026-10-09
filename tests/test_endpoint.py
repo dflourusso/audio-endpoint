@@ -80,7 +80,7 @@ def test_cpu_and_memory_parsers():
 
 
 def test_project_version_comes_from_the_version_file():
-    assert read_project_version() == "0.2.3"
+    assert read_project_version() == "1.0.0"
 
 
 def test_hosts_file_gains_mdns_name():
@@ -178,7 +178,7 @@ class FakeAgent:
         return {"ok": True, "message": "ok", "hostname": fields.get("hostname")}
 
 
-def build_client(agent=None, webhook_url=""):
+def build_client(agent=None):
     import tempfile
     root = Path(tempfile.mkdtemp())
     settings = Settings(
@@ -195,10 +195,7 @@ def build_client(agent=None, webhook_url=""):
         web_dist=Path("/tmp/missing-web"),
         project_version="0.1.0",
         web_port=80,
-        airplay_webhook_url=webhook_url,
-        airplay_flag=root / "airplay-playing",
-        airplay_run=root / "airplay",
-        supervise_airplay=False,
+        watch_bluetooth=False,
     )
     bridge = FakeBridge()
     agent = agent or FakeAgent()
@@ -307,12 +304,12 @@ def test_auto_released_player_uses_the_live_name_when_the_flag_is_only_in_config
         ]
     }
     assert auto_released_player(status, config) == "JBL Bar 2.1 @ audio-suite"
-    assert bluetooth_recovery(status, config, set()) == [
+    assert bluetooth_recovery(status, config) == [
         {"mac": mac, "player_name": "JBL Bar 2.1 @ audio-suite", "reclaim": True, "urgent": False}
     ]
     connected = dict(status)
     connected["bluetooth_connected"] = True
-    assert bluetooth_recovery(connected, config, set()) == []
+    assert bluetooth_recovery(connected, config) == []
 
 
 def test_play_without_a_bluetooth_link_asks_for_reconnect():
@@ -324,15 +321,13 @@ def test_play_without_a_bluetooth_link_asks_for_reconnect():
         "playing": False,
     }
     config = {"BLUETOOTH_DEVICES": [{"mac": mac, "player_name": "JBL Bar 2.1", "released": False}]}
-    assert bluetooth_recovery(status, config, {mac}) == [
+    status["playing"] = True
+    assert bluetooth_recovery(status, config) == [
         {"mac": mac, "player_name": "JBL Bar 2.1 @ audio-suite", "reclaim": False, "urgent": True}
     ]
-    status["playing"] = True
-    assert bluetooth_recovery(status, config, set())[0]["urgent"] is True
     idle = bluetooth_recovery(
         {"player_name": "JBL Bar 2.1 @ audio-suite", "bluetooth_mac": mac, "bluetooth_connected": False, "playing": False},
         config,
-        set(),
     )
     assert idle == []
 
@@ -572,8 +567,8 @@ def test_update_pulls_the_bridge_and_builds_the_local_image(tmp_path):
 
     HostControl(tmp_path, runner)._update()
     docker_calls = [args for args in calls if args and args[0] == "docker"]
-    assert docker_calls[0][-3:] == ["pull", "sendspin-bridge", "shairport-sync"]
-    assert docker_calls[1][-3:] == ["up", "-d", "--build"]
+    assert docker_calls[0][-2:] == ["pull", "sendspin-bridge"]
+    assert docker_calls[1][-4:] == ["up", "-d", "--build", "--remove-orphans"]
     status = json.loads((tmp_path / "data" / "update-status.json").read_text())
     assert status["state"] == "succeeded"
 

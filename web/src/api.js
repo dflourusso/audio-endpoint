@@ -27,9 +27,6 @@ export const api = {
   outputs: () => request("/api/audio/outputs"),
   selectOutput: (id) => request("/api/audio/output", { method: "POST", body: JSON.stringify({ id }) }),
   sendspin: () => request("/api/sendspin/status"),
-  airplay: () => request("/api/airplay/status"),
-  airplayWebhook: (mac, webhook) =>
-    request("/api/bluetooth/webhook", { method: "POST", body: JSON.stringify({ mac, webhook }) }),
   musicAssistant: () => request("/api/music-assistant/status"),
   logs: (source) => request(`/api/logs?source=${encodeURIComponent(source)}&lines=150`),
   restart: (target) => request("/api/maintenance/restart", { method: "POST", body: JSON.stringify({ target }) }),
