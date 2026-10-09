@@ -4,7 +4,7 @@ from pathlib import Path
 
 import httpx
 
-from airplay_link import decide, loopback_arguments, mark_ready, parse_inputs, parse_modules, parse_sinks
+from airplay_link import decide, mark_ready, parse_inputs, parse_modules, parse_sinks
 from app.airplay import AirPlaySwitch, RecoveryClock, supervise
 from app.airplay_speakers import SpeakerStore, clean_webhook
 from audio_endpoint_agent import HostControl, dispatch
@@ -40,6 +40,7 @@ def test_each_speaker_gets_its_own_airplay(tmp_path):
     assert 'port = 7000' in sala
     assert "airplay_device_id_offset = 0" in sala
     assert 'sink = "airplay_AA_BB_CC_DD_EE_01"' in sala
+    assert 'application_name = "AirPlay AA_BB_CC_DD_EE_01"' in sala
     assert "/notify.sh true AA:BB:CC:DD:EE:01" in sala
     assert 'name = "Suíte \\"A\\" @ audio-sala"' in suite
     assert "port = 7001" in suite
@@ -96,26 +97,12 @@ def test_airplay_mutes_only_the_speaker_that_is_playing():
         {"name": "module-loopback", "index": 10, "argument": "source=airplay_AA_BB_CC_DD_EE_02.monitor sink=bluez_output.AA_BB_CC_DD_EE_02.1"},
     ]))
     decision = decide(sinks, inputs, modules, speakers)
-    assert decision["mute"] == [10]
+    assert decision["mute"] == [10, 12]
     assert decision["unmute"] == []
     assert decision["load_null"] == []
     assert decision["unload"] == [9, 10]
-    assert decision["load_loopback"] == [
-        {
-            "source": "airplay_AA_BB_CC_DD_EE_01.monitor",
-            "sink": "bluez_output.AA_BB_CC_DD_EE_01.1",
-            "token": "AA_BB_CC_DD_EE_01",
-        },
-        {
-            "source": "airplay_AA_BB_CC_DD_EE_02.monitor",
-            "sink": "bluez_output.AA_BB_CC_DD_EE_02.1",
-            "token": "AA_BB_CC_DD_EE_02",
-        },
-    ]
-    arguments = loopback_arguments(decision["load_loopback"][0])
-    assert "node.passive=false" in arguments[-1]
-    assert "application.name=AirPlayLink" in arguments[-1]
-    assert "media.name=AA_BB_CC_DD_EE_01" in arguments[-1]
+    assert decision["load_loopback"] == []
+    assert decision["move"] == []
 
 
 def test_missing_speaker_keeps_its_sink_and_drops_the_loopback():
@@ -131,7 +118,7 @@ def test_missing_speaker_keeps_its_sink_and_drops_the_loopback():
     assert gone["unload"] == [4]
 
 
-def test_pipewire_link_is_not_muted_and_is_not_duplicated():
+def test_airplay_moves_onto_the_speaker_and_mutes_sendspin_named_with_the_mac():
     speakers = [{"token": "AA_BB_CC_DD_EE_01", "playing": True}]
     sinks = parse_sinks(json.dumps([
         {"index": 1, "name": "airplay_AA_BB_CC_DD_EE_01", "state": "RUNNING"},
@@ -140,47 +127,68 @@ def test_pipewire_link_is_not_muted_and_is_not_duplicated():
     inputs = parse_inputs(json.dumps([
         {
             "index": 10,
-            "sink": "bluez_output.AA_BB_CC_DD_EE_01.1",
+            "sink": {"index": 3, "name": "bluez_output.AA_BB_CC_DD_EE_01.1"},
             "mute": False,
-            "properties": {"application.name": "Sendspin"},
+            "properties": {
+                "application.name": "Sendspin",
+                "media.name": "bluez_output.AA_BB_CC_DD_EE_01.1",
+            },
         },
         {
             "index": 12,
-            "sink": "bluez_output.AA_BB_CC_DD_EE_01.1",
+            "sink": 1,
             "mute": True,
-            "owner_module": 4294967295,
-            "properties": {"application.name": "PipeWire", "media.name": "AA_BB_CC_DD_EE_01"},
+            "state": "RUNNING",
+            "properties": {"application.name": "AirPlay AA_BB_CC_DD_EE_01"},
         },
     ]))
     modules = parse_modules(json.dumps([
         {"name": "module-null-sink", "index": 20, "argument": "sink_name=airplay_AA_BB_CC_DD_EE_01"},
-        {"name": "module-loopback", "index": 9, "argument": ""},
+        {
+            "name": "module-loopback",
+            "index": 9,
+            "argument": "source=airplay_AA_BB_CC_DD_EE_01.monitor sink=bluez_output.AA_BB_CC_DD_EE_01.1",
+        },
     ]))
     decision = decide(sinks, inputs, modules, speakers)
-    assert 12 not in decision["mute"]
-    assert decision["unmute"] == [12]
+    assert decision["move"] == [{"index": 12, "sink": "bluez_output.AA_BB_CC_DD_EE_01.1"}]
     assert decision["mute"] == [10]
+    assert decision["unmute"] == [12]
+    assert decision["unload"] == [9]
     assert decision["load_loopback"] == []
-    assert decision["unload"] == []
 
 
-def test_marked_loopback_is_kept():
-    argument = (
-        "source=airplay_AA_BB_CC_DD_EE_01.monitor "
-        "sink=bluez_output.AA_BB_CC_DD_EE_01.1 "
-        "sink_input_properties=application.name=AirPlayLink "
-        "media.name=AA_BB_CC_DD_EE_01 node.passive=false"
-    )
+def test_running_airplay_without_the_flag_still_takes_the_speaker():
     sinks = parse_sinks(json.dumps([
-        {"index": 1, "name": "airplay_AA_BB_CC_DD_EE_01", "state": "RUNNING"},
         {"index": 3, "name": "bluez_output.AA_BB_CC_DD_EE_01.1", "state": "RUNNING"},
     ]))
-    modules = parse_modules(json.dumps([
-        {"name": "module-loopback", "index": 9, "argument": argument},
+    inputs = parse_inputs(json.dumps([
+        {"index": 10, "sink": 3, "mute": False, "properties": {"application.name": "Sendspin"}},
+        {
+            "index": 12,
+            "sink": 3,
+            "mute": False,
+            "state": "RUNNING",
+            "properties": {"application.name": "AirPlay AA_BB_CC_DD_EE_01"},
+        },
     ]))
-    decision = decide(sinks, [], modules, [{"token": "AA_BB_CC_DD_EE_01", "playing": True}])
-    assert decision["load_loopback"] == []
-    assert decision["unload"] == []
+    decision = decide(sinks, inputs, [], [{"token": "AA_BB_CC_DD_EE_01", "playing": False}])
+    assert decision["move"] == []
+    assert decision["mute"] == [10]
+    assert 12 not in decision["mute"]
+
+
+def test_ended_session_returns_the_speaker_to_music_assistant():
+    sinks = parse_sinks(json.dumps([
+        {"index": 3, "name": "bluez_output.AA_BB_CC_DD_EE_01.1", "state": "RUNNING"},
+    ]))
+    inputs = parse_inputs(json.dumps([
+        {"index": 10, "sink": "bluez_output.AA_BB_CC_DD_EE_01.1", "mute": True, "properties": {"application.name": "Sendspin"}},
+    ]))
+    decision = decide(sinks, inputs, [], [{"token": "AA_BB_CC_DD_EE_01", "playing": False}])
+    assert decision["unmute"] == [10]
+    assert decision["mute"] == []
+    assert decision["move"] == []
 
 
 def test_ready_stamp_follows_the_sink(tmp_path):

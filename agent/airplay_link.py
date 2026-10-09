@@ -7,7 +7,6 @@ from pathlib import Path
 
 DEVICES_PATH = Path("/run/audio-endpoint/airplay/devices.json")
 READY_DIR = Path("/run/audio-endpoint/airplay/ready")
-LINK_NAME = "AirPlayLink"
 
 
 def _load_json(text: str):
@@ -52,6 +51,7 @@ def parse_inputs(text: str) -> list[dict]:
                 "index": row.get("index"),
                 "sink": row.get("sink"),
                 "mute": bool(row.get("mute")),
+                "state": str(row.get("state") or "").upper(),
                 "owner_module": owner,
                 "application": str(properties.get("application.name") or ""),
                 "media": str(properties.get("media.name") or ""),
@@ -126,46 +126,30 @@ def _bluez_for(sinks: list[dict], token: str) -> dict | None:
     return matches[0] if matches else None
 
 
+def airplay_application(token: str) -> str:
+    return f"AirPlay {token}"
+
+
 def _on_speaker(item: dict, bluez: dict) -> bool:
     sink = item.get("sink")
+    if isinstance(sink, dict):
+        if sink.get("index") is not None and str(sink.get("index")) == str(bluez.get("index")):
+            return True
+        name = str(sink.get("name") or "")
+        return bool(name) and name == bluez.get("name")
     if sink is None:
         return False
-    return sink == bluez.get("index") or str(sink) == bluez.get("name")
-
-
-def _is_copy(item: dict, token: str, module_ids: set[str]) -> bool:
-    if item.get("application") == LINK_NAME:
+    if bluez.get("index") is not None and str(sink) == str(bluez.get("index")):
         return True
-    media = str(item.get("media") or "")
-    if token and token in media:
-        return True
-    label = f"{item.get('application', '')} {media}".lower()
-    if "loopback" in label:
-        return True
-    owner = item.get("owner_module")
-    return owner is not None and str(owner) in module_ids
+    return str(sink) == bluez.get("name")
 
 
-def _marked_stream(inputs: list[dict], bluez: dict, token: str) -> bool:
-    for item in inputs:
-        if not _on_speaker(item, bluez):
-            continue
-        if item.get("application") == LINK_NAME:
-            return True
-        if token and token in str(item.get("media") or ""):
-            return True
-    return False
+def _is_airplay(item: dict, token: str) -> bool:
+    return item.get("application") == airplay_application(token)
 
 
-def loopback_arguments(item: dict) -> list[str]:
-    token = item["token"]
-    return [
-        f"source={item['source']}",
-        f"sink={item['sink']}",
-        "source_dont_move=true",
-        "sink_dont_move=true",
-        f"sink_input_properties=application.name={LINK_NAME} media.name={token} node.passive=false",
-    ]
+def _airplay_stream(inputs: list[dict], token: str) -> dict | None:
+    return next((item for item in inputs if _is_airplay(item, token)), None)
 
 
 def _unique(items: list) -> list:
@@ -182,7 +166,7 @@ def decide(sinks: list[dict], inputs: list[dict], modules: list[dict], speakers:
     wanted = {speaker["token"] for speaker in speakers}
     load_null = []
     unload = []
-    load_loopback = []
+    move = []
     mute = []
     unmute = []
 
@@ -194,61 +178,40 @@ def decide(sinks: list[dict], inputs: list[dict], modules: list[dict], speakers:
         if token not in wanted and row.get("index") is not None:
             unload.append(row["index"])
 
+    for item in loopbacks:
+        if item.get("index") is not None:
+            unload.append(item["index"])
+
     for speaker in speakers:
         token = speaker["token"]
         hold = f"airplay_{token}"
-        hold_ready = hold in sink_names
-        if not hold_ready:
+        if hold not in sink_names:
             load_null.append(hold)
-        source = f"{hold}.monitor"
-        candidates = [item for item in loopbacks if item["source"] == source]
-        bluez = _bluez_for(sinks, token) if hold_ready else None
+        bluez = _bluez_for(sinks, token)
+        stream = _airplay_stream(inputs, token)
+        active = bool(speaker["playing"]) or (stream is not None and stream.get("state") == "RUNNING")
+        if stream is not None and stream.get("index") is not None:
+            if stream.get("mute"):
+                unmute.append(stream["index"])
+            if bluez is not None and not _on_speaker(stream, bluez):
+                move.append({"index": stream["index"], "sink": bluez["name"]})
         if bluez is None:
-            for item in candidates:
-                if item.get("index") is not None:
-                    unload.append(item["index"])
             continue
-        kept = next(
-            (
-                item
-                for item in candidates
-                if item.get("sink_name") == bluez["name"] and LINK_NAME in item.get("argument", "")
-            ),
-            None,
-        )
-        if kept is not None:
-            for item in candidates:
-                if item.get("index") is not None and item.get("index") != kept.get("index"):
-                    unload.append(item["index"])
-        elif _marked_stream(inputs, bluez, token) and not candidates:
-            pass
-        else:
-            for item in candidates:
-                if item.get("index") is not None:
-                    unload.append(item["index"])
-            load_loopback.append({"source": source, "sink": bluez["name"], "token": token})
-        module_ids = {str(item["index"]) for item in candidates if item.get("index") is not None}
         for item in inputs:
-            if not _on_speaker(item, bluez) or item.get("index") is None:
+            if item.get("index") is None or not _on_speaker(item, bluez):
                 continue
-            if _is_copy(item, token, module_ids):
-                if item.get("mute"):
-                    unmute.append(item["index"])
+            if _is_airplay(item, token):
                 continue
-            if speaker["playing"] and not item.get("mute"):
+            if active and not item.get("mute"):
                 mute.append(item["index"])
-            if not speaker["playing"] and item.get("mute"):
+            if not active and item.get("mute"):
                 unmute.append(item["index"])
-
-    for item in loopbacks:
-        token = item["source"].removeprefix("airplay_").removesuffix(".monitor")
-        if token not in wanted and item.get("index") is not None:
-            unload.append(item["index"])
 
     return {
         "load_null": load_null,
         "unload": _unique(unload),
-        "load_loopback": load_loopback,
+        "load_loopback": [],
+        "move": move,
         "mute": _unique(mute),
         "unmute": _unique(unmute),
     }
@@ -303,8 +266,8 @@ def apply_once(run, devices_path: Path = DEVICES_PATH, ready_dir: Path = READY_D
                 "channels=2",
             ]
         )
-    for item in decision["load_loopback"]:
-        run(["pactl", "load-module", "module-loopback", *loopback_arguments(item)])
+    for item in decision["move"]:
+        run(["pactl", "move-sink-input", str(item["index"]), item["sink"]])
     for index in decision["mute"]:
         run(["pactl", "set-sink-input-mute", str(index), "1"])
     for index in decision["unmute"]:
