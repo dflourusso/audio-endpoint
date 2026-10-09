@@ -5,6 +5,7 @@ os outros fluxos dessa caixa, com wpctl, e os devolve quando a sessão acaba.
 """
 
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -23,10 +24,27 @@ def airplay_application(token: str) -> str:
     return f"AirPlay {token}"
 
 
+def _json_documents(text: str) -> list:
+    decoder = json.JSONDecoder()
+    index = 0
+    documents = []
+    length = len(text)
+    while index < length:
+        while index < length and text[index].isspace():
+            index += 1
+        if index >= length:
+            break
+        document, index = decoder.raw_decode(text, index)
+        documents.append(document)
+    return documents
+
+
 def parse_dump(text: str) -> tuple[list[dict], list[dict]]:
-    payload = json.loads(text)
-    if not isinstance(payload, list):
+    lists = [document for document in _json_documents(text) if isinstance(document, list)]
+    if not lists:
         raise ValueError("pw-dump sem lista")
+    # O pw-dump às vezes cola um segundo JSON depois do registro completo.
+    payload = max(lists, key=len)
     nodes = []
     links = []
     for item in payload:
@@ -134,6 +152,13 @@ def decide(
         elif token in saved:
             restore.append(token)
     return {"silence": silence, "restore": restore, "present": present}
+
+
+def prepare_ready_dir(path: Path, uid: int | None = None, gid: int | None = None) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    if uid is None:
+        return
+    os.chown(path, uid, -1 if gid is None else gid)
 
 
 def mark_ready(speakers: list[dict], nodes: list[dict], ready_dir: Path = READY_DIR) -> None:

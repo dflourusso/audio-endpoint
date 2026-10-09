@@ -12,6 +12,7 @@ import threading
 import time
 from pathlib import Path
 
+from airplay_link import READY_DIR, prepare_ready_dir
 from wifi_setup import WifiInputError, WifiManager
 
 HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -82,8 +83,20 @@ class HostControl:
             return
 
     def ensure_airplay(self) -> None:
+        self._prepare_airplay_ready()
         self._retire_static_sink()
         self._install_airplay_link()
+
+    def _prepare_airplay_ready(self) -> None:
+        uid, gid = self._audio_ids()
+        prepare_ready_dir(READY_DIR, uid, gid)
+
+    def _audio_ids(self) -> tuple[int | None, int | None]:
+        completed = self.run(["getent", "passwd", "audioendpoint"])
+        parts = completed.stdout.split(":") if completed.returncode == 0 else []
+        if len(parts) < 4 or not parts[2].isdigit() or not parts[3].isdigit():
+            return None, None
+        return int(parts[2]), int(parts[3])
 
     def drop_airplay(self, mac: str) -> None:
         token = mac.replace(":", "_")

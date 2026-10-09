@@ -102,6 +102,24 @@ def _graph(*nodes, links=()):
     return parse_dump(json.dumps(payload))
 
 
+def test_dump_ignores_a_second_json_document():
+    first = [
+        _node(3, "bluez_output.AA_BB_CC_DD_EE_01.1", "Audio/Sink"),
+        _node(10, "sendspin-sala", "Stream/Output/Audio", "Sendspin", "bluez_output.AA_BB_CC_DD_EE_01.1"),
+    ]
+    extra = [{"id": 73, "info": None}]
+    nodes, _links = parse_dump(json.dumps(first) + "\n" + json.dumps(extra) + "\n")
+    leading, _links = parse_dump(json.dumps(extra) + "\n" + json.dumps(first) + "\n")
+    assert {node["name"] for node in nodes} == {
+        "bluez_output.AA_BB_CC_DD_EE_01.1",
+        "sendspin-sala",
+    }
+    assert {node["name"] for node in leading} == {node["name"] for node in nodes}
+    decision = decide(nodes, [{"token": "AA_BB_CC_DD_EE_01", "playing": True}])
+    assert [item["id"] for item in decision["silence"]] == [10]
+    assert "AA_BB_CC_DD_EE_01" in decision["present"]
+
+
 def test_airplay_silences_only_the_speaker_that_is_playing():
     speakers = [
         {"token": "AA_BB_CC_DD_EE_01", "playing": True},
