@@ -13,6 +13,7 @@ from app.bluetooth_service import BluetoothService
 from app.bridge import BridgeClient, BridgeError
 from app.routers import airplay, audio, bluetooth, maintenance, status, system, wifi
 from app.settings import load_settings
+from app.system_info import hostname_of, read_text
 
 SETUP_ALLOWED = {
     "/api/health",
@@ -30,6 +31,9 @@ def create_app(settings=None, bridge=None, agent=None, supervise_airplay=None) -
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        hostname = hostname_of(read_text(settings.hostname_file)) or ""
+        if hostname:
+            app.state.speakers.republish(hostname)
         stop = threading.Event()
         thread = None
         if supervise_airplay:

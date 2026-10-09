@@ -55,6 +55,17 @@ def test_each_speaker_gets_its_own_airplay(tmp_path):
     assert list(directory.glob("*.conf")) == []
 
 
+def test_republish_rewrites_a_stale_airplay_config(tmp_path):
+    store = _store(tmp_path)
+    path = tmp_path / "config" / "shairport" / "AA_BB_CC_DD_EE_01.conf"
+    path.write_text(path.read_text(encoding="utf-8").replace("  volume_range_db = 30;\n", ""), encoding="utf-8")
+    fresh = SpeakerStore(tmp_path / "config", tmp_path / "run")
+    fresh.republish("audio-sala")
+    text = path.read_text(encoding="utf-8")
+    assert "volume_range_db = 30" in text
+    assert 'name = "Sala @ audio-sala"' in text
+
+
 def test_webhook_stays_out_of_the_bridge_and_survives_a_rename(tmp_path):
     store = _store(tmp_path)
     store.set_webhook(SUITE, "http://192.168.0.100:8123/api/webhook/suite")
