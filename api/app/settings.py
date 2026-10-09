@@ -36,7 +36,7 @@ def read_project_version() -> str:
             continue
         if version:
             return version
-    return os.environ.get("PROJECT_VERSION", "").strip() or "0.2.2"
+    return os.environ.get("PROJECT_VERSION", "").strip() or "0.2.3"
 
 
 def load_settings() -> Settings:
