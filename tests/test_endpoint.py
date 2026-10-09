@@ -80,7 +80,7 @@ def test_cpu_and_memory_parsers():
 
 
 def test_project_version_comes_from_the_version_file():
-    assert read_project_version() == "0.2.1"
+    assert read_project_version() == "0.2.2"
 
 
 def test_hosts_file_gains_mdns_name():
